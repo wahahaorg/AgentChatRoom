@@ -90,9 +90,10 @@ function writeDoneStatus(writer: UIMessageStreamWriter): void {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { messages, sessionConfig } = body as {
+  const { messages, sessionConfig, mentionedAgentIds } = body as {
     messages: UIMessage[];
     sessionConfig: SessionConfig;
+    mentionedAgentIds?: string[];
   };
 
   const sanitizedMessages = sanitizeIncomingMessages(messages ?? []);
@@ -107,6 +108,7 @@ export async function POST(request: Request) {
           sessionConfig,
           modelMessages,
           orchestration: config.orchestration,
+          mentionedAgentIds: mentionedAgentIds ?? [],
         };
 
         if (sessionConfig.mode === 'round-robin') {

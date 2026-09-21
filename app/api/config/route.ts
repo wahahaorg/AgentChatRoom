@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server';
 import { readConfig, writeConfig } from '@/lib/storage/config-store';
 import type { CouncilConfig } from '@/lib/types/config';
 
+function maskKey(key?: string): string {
+  if (!key) return '';
+  return `${'•'.repeat(Math.max(0, key.length - 4))}${key.slice(-4)}`;
+}
+
 export async function GET() {
   try {
     const config = await readConfig();
@@ -11,9 +16,13 @@ export async function GET() {
       apiKeys: Object.fromEntries(
         Object.entries(config.apiKeys).map(([provider, key]) => [
           provider,
-          key ? `${'•'.repeat(Math.max(0, key.length - 4))}${key.slice(-4)}` : '',
+          maskKey(key),
         ])
       ),
+      customProviders: (config.customProviders ?? []).map((cp) => ({
+        ...cp,
+        apiKey: maskKey(cp.apiKey),
+      })),
     };
     return NextResponse.json(masked);
   } catch (err) {
@@ -36,6 +45,7 @@ export async function PUT(request: Request) {
         ...current.apiKeys,
         ...(body.apiKeys ?? {}),
       },
+      customProviders: body.customProviders !== undefined ? body.customProviders : (current.customProviders ?? []),
       orchestration: {
         ...current.orchestration,
         ...(body.orchestration ?? {}),
@@ -45,11 +55,25 @@ export async function PUT(request: Request) {
     // Don't overwrite real keys with masked values
     for (const [provider, key] of Object.entries(updated.apiKeys)) {
       if (key && key.includes('•')) {
-        const currentKey = current.apiKeys[provider as keyof typeof current.apiKeys];
+        const currentKey = current.apiKeys[provider];
         if (currentKey) {
-          (updated.apiKeys as Record<string, string>)[provider] = currentKey;
+          updated.apiKeys[provider] = currentKey;
         }
       }
+    }
+
+    // Don't overwrite real keys in customProviders with masked values
+    if (updated.customProviders) {
+      updated.customProviders = updated.customProviders.map((cp) => {
+        if (cp.apiKey && cp.apiKey.includes('•')) {
+          const existing = current.customProviders?.find((c) => c.id === cp.id);
+          return {
+            ...cp,
+            apiKey: existing?.apiKey ?? cp.apiKey,
+          };
+        }
+        return cp;
+      });
     }
 
     await writeConfig(updated);

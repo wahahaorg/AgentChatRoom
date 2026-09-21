@@ -15,6 +15,17 @@ function normalizeGoogleModelId(modelId: string): string {
 }
 
 export function createModelInstance(agent: AgentConfig, config: CouncilConfig) {
+  // Check if it's a custom provider
+  const customProvider = config.customProviders?.find((p) => p.id === agent.providerId);
+  if (customProvider) {
+    const key = customProvider.apiKey || config.apiKeys[customProvider.id] || 'no-key-required';
+    const openai = createOpenAI({
+      baseURL: customProvider.baseURL,
+      apiKey: key,
+    });
+    return openai(agent.modelId);
+  }
+
   const apiKey = config.apiKeys[agent.providerId];
   if (!apiKey) {
     throw new Error(`No API key configured for provider: ${agent.providerId}`);

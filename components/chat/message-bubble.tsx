@@ -1,8 +1,10 @@
 'use client';
 
+import { memo } from 'react';
 import { MarkdownRenderer } from './markdown-renderer';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
 import { ExternalLink, File, FileText, Image as ImageIcon } from 'lucide-react';
 
 export interface ChatFileAttachment {
@@ -23,7 +25,9 @@ interface MessageBubbleProps {
   isStreaming?: boolean;
 }
 
-export function MessageBubble({
+// Memoized: past messages never change during streaming — skip re-rendering
+// them on every streamed token.
+export const MessageBubble = memo(function MessageBubble({
   role,
   content,
   files = [],
@@ -35,6 +39,7 @@ export function MessageBubble({
   isStreaming,
 }: MessageBubbleProps) {
   const isUser = role === 'user';
+  const { t } = useI18n();
 
   return (
     <div className={cn('flex min-w-0 gap-3 py-4', isUser ? 'justify-end' : 'justify-start')}>
@@ -51,13 +56,13 @@ export function MessageBubble({
       <div className={cn('min-w-0 space-y-1', isUser ? 'max-w-[78%] items-end' : 'max-w-[92%] items-start')}>
         {!isUser && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-medium">{agentName ?? 'Primary response'}</span>
+            <span className="font-medium">{agentName ?? t.primaryResponse}</span>
             {responseKind === 'primary' && (
               <span
                 className="rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                 style={agentColour ? { borderColor: agentColour, color: agentColour } : undefined}
               >
-                Primary
+                {t.primary}
               </span>
             )}
             {agentModel && <span className="text-[11px]">{agentModel}</span>}
@@ -89,13 +94,13 @@ export function MessageBubble({
       {isUser && (
         <Avatar className="h-8 w-8 shrink-0">
           <AvatarFallback className="text-sm bg-primary text-primary-foreground">
-            You
+            {t.you}
           </AvatarFallback>
         </Avatar>
       )}
     </div>
   );
-}
+});
 
 function AttachmentList({
   files,
@@ -126,17 +131,18 @@ function AttachmentItem({
   file: ChatFileAttachment;
   isUser: boolean;
 }) {
+  const { t } = useI18n();
   const isImage = file.mediaType.startsWith('image/');
   const isPdf = file.mediaType === 'application/pdf' || file.filename?.toLowerCase().endsWith('.pdf');
   const Icon = isImage ? ImageIcon : isPdf ? FileText : File;
-  const label = file.filename ?? file.mediaType ?? 'Attached file';
-  const meta = file.mediaType || getExtension(label).toUpperCase() || 'file';
+  const label = file.filename ?? file.mediaType ?? t.attachedFile;
+  const meta = file.mediaType || getExtension(label).toUpperCase() || t.attachedFile;
 
   return (
     <button
       type="button"
       onClick={() => openAttachment(file)}
-      title={`Open ${label}`}
+      title={`${t.openFile} ${label}`}
       className={cn(
         'group flex w-full min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors',
         isUser

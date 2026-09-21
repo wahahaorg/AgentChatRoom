@@ -26,6 +26,7 @@ export async function readConfig(): Promise<CouncilConfig> {
         ...DEFAULT_CONFIG.apiKeys,
         ...(parsed.apiKeys ?? {}),
       },
+      customProviders: parsed.customProviders ?? DEFAULT_CONFIG.customProviders ?? [],
       agents: parsed.agents ?? DEFAULT_CONFIG.agents,
       orchestration: {
         ...DEFAULT_CONFIG.orchestration,

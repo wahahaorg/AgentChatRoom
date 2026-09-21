@@ -1,5 +1,6 @@
 export interface ParsedInterjection {
-  agentAvatar: string;
+  agentAvatar?: string;
+  agentColour?: string;
   agentName: string;
   agentRole: string;
   content: string;

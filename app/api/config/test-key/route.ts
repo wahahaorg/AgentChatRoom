@@ -5,16 +5,20 @@ import type { ProviderId } from '@/lib/types/config';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { providerId, apiKey } = body as { providerId: ProviderId; apiKey: string };
+    const { providerId, apiKey, baseURL } = body as {
+      providerId: ProviderId;
+      apiKey?: string;
+      baseURL?: string;
+    };
 
-    if (!providerId || !apiKey) {
+    if (!providerId) {
       return NextResponse.json(
-        { error: 'Missing providerId or apiKey' },
+        { error: 'Missing providerId' },
         { status: 400 }
       );
     }
 
-    const result = await testApiKey(providerId, apiKey);
+    const result = await testApiKey(providerId, apiKey ?? '', baseURL);
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(

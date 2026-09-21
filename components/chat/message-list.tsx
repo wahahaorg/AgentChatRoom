@@ -4,7 +4,9 @@ import { useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { MessageBubble, type ChatFileAttachment } from './message-bubble';
 import { InterjectionBlock } from './interjection-block';
+import { AgentErrorBlock } from './agent-error-block';
 import { parseResponse } from '@/lib/orchestrator/parse-interjections';
+import { useI18n } from '@/lib/i18n';
 import type { UIMessage } from 'ai';
 import type { AgentConfig } from '@/lib/types/agents';
 
@@ -81,15 +83,24 @@ function findAgentForInterjection(
     ?? agents.find((agent) => agent.name === agentName);
 }
 
+interface MessageSegment {
+  kind: 'primary' | 'interjection' | 'agent-error';
+  text?: string;
+  interjection?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; content: string };
+  agentError?: { agentName: string; agentAvatar: string; agentColour?: string; error: string };
+}
+
 export function MessageList({
   messages,
   primaryAgent,
   allAgents = [],
   isStreaming,
 }: MessageListProps) {
+  const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const previousMessageCountRef = useRef(0);
+  const lastScrollAtRef = useRef(0);
 
   useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -104,9 +115,13 @@ export function MessageList({
       return;
     }
 
-    if (shouldAutoScrollRef.current) {
-      scrollElement.scrollTo({ top: scrollElement.scrollHeight });
-    }
+    if (!shouldAutoScrollRef.current) return;
+
+    // Throttle during streaming: tokens arrive faster than frames.
+    const now = Date.now();
+    if (now - lastScrollAtRef.current < 200) return;
+    lastScrollAtRef.current = now;
+    scrollElement.scrollTo({ top: scrollElement.scrollHeight });
   }, [messages]);
 
   const handleScroll = () => {
@@ -131,7 +146,7 @@ export function MessageList({
             className="h-auto w-full dark:invert dark:mix-blend-screen"
           />
           <p className="text-muted-foreground">
-            Start a conversation with your council of AI agents. Configure your agents and API keys in Settings.
+            {t.emptyChat}
           </p>
         </div>
       </div>
@@ -147,58 +162,130 @@ export function MessageList({
       <div className="mx-auto w-full max-w-3xl px-4 py-4">
         {messages.map((message, index) => {
           const isLast = index === messages.length - 1;
-          const textContent = message.parts
-            ?.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-            .map((p) => p.text)
-            .join('') ?? '';
           const fileParts = message.parts
             ?.filter((p): p is ChatFileAttachment & { type: 'file' } => p.type === 'file')
             .map(({ filename, mediaType, url }) => ({ filename, mediaType, url })) ?? [];
 
           if (message.role === 'assistant') {
-            if (!textContent.trim() && fileParts.length === 0) return null;
+            const segments: MessageSegment[] = [];
+            let primaryText = '';
 
-            const { primaryContent, interjections } = parseResponse(textContent);
+            for (const part of message.parts ?? []) {
+              if (part.type === 'text') {
+                if (segments.length === 0) {
+                  primaryText += part.text;
+                } else {
+                  // Fallback for legacy messages where interjections were
+                  // embedded as markdown text after a data part.
+                  segments[segments.length - 1].text =
+                    (segments[segments.length - 1].text ?? '') + part.text;
+                }
+              } else if (part.type === 'data-interjection') {
+                segments.push({ kind: 'interjection', interjection: part.data as MessageSegment['interjection'] });
+              } else if (part.type === 'data-agent-error') {
+                segments.push({ kind: 'agent-error', agentError: part.data as NonNullable<MessageSegment['agentError']> });
+              }
+            }
+
+            if (!primaryText.trim() && segments.length === 0 && fileParts.length === 0) return null;
+
+            // Legacy messages stored interjections inline in the text — parse them out.
+            if (segments.length === 0 && /\\n\\n---\\n\\n|\n\n---\n\n/.test(primaryText)) {
+              const parsed = parseResponse(primaryText);
+              primaryText = parsed.primaryContent;
+              for (const interjection of parsed.interjections) {
+                segments.push({ kind: 'interjection', interjection });
+              }
+            }
+
             const responseAgent = getResponseAgent(
               message,
               primaryAgent,
               isLast && Boolean(isStreaming),
             );
+            const streamingPrimary = isLast && isStreaming
+              && segments.every((s) => s.kind === 'primary');
 
             return (
               <div key={message.id}>
-                <MessageBubble
-                  role="assistant"
-                  content={primaryContent}
-                  files={fileParts}
-                  responseKind="primary"
-                  agentName={responseAgent?.name}
-                  agentModel={responseAgent?.modelId}
-                  agentAvatar={responseAgent?.avatar}
-                  agentColour={responseAgent?.colour}
-                  isStreaming={isLast && isStreaming && interjections.length === 0}
-                />
-                {interjections.map((interjection, i) => {
-                  const interjectionAgent = findAgentForInterjection(
-                    allAgents,
-                    interjection.agentName,
-                    interjection.agentRole,
-                  );
+                {primaryText.trim() && (
+                  <MessageBubble
+                    role="assistant"
+                    content={primaryText}
+                    files={fileParts}
+                    responseKind="primary"
+                    agentName={responseAgent?.name}
+                    agentModel={responseAgent?.modelId}
+                    agentAvatar={responseAgent?.avatar}
+                    agentColour={responseAgent?.colour}
+                    isStreaming={streamingPrimary}
+                  />
+                )}
+                {segments.map((segment, i) => {
+                  if (segment.kind === 'interjection' && segment.interjection) {
+                    const interjection = segment.interjection;
+                    const interjectionAgent = findAgentForInterjection(
+                      allAgents,
+                      interjection.agentName,
+                      interjection.agentRole,
+                    );
 
-                  return (
-                    <InterjectionBlock
-                      key={`${message.id}-interjection-${i}`}
-                      agentName={interjection.agentName}
-                      agentRole={interjection.agentRole}
-                      agentAvatar={interjectionAgent?.avatar ?? interjection.agentAvatar}
-                      agentColour={interjectionAgent?.colour}
-                      content={interjection.content}
-                    />
-                  );
+                    return (
+                      <InterjectionBlock
+                        key={`${message.id}-interjection-${i}`}
+                        agentName={interjection.agentName}
+                        agentRole={interjection.agentRole}
+                        agentAvatar={interjectionAgent?.avatar ?? interjection.agentAvatar ?? 'AI'}
+                        agentColour={interjectionAgent?.colour ?? interjection.agentColour}
+                        content={interjection.content}
+                      />
+                    );
+                  }
+
+                  if (segment.kind === 'agent-error' && segment.agentError) {
+                    const agentError = segment.agentError;
+                    return (
+                      <AgentErrorBlock
+                        key={`${message.id}-agent-error-${i}`}
+                        agentName={agentError.agentName}
+                        agentAvatar={agentError.agentAvatar}
+                        agentColour={agentError.agentColour}
+                        error={agentError.error}
+                      />
+                    );
+                  }
+
+                  if (segment.text?.trim()) {
+                    const interjectionAgent = segments[i - 1]?.interjection
+                      ? findAgentForInterjection(
+                          allAgents,
+                          segments[i - 1].interjection!.agentName,
+                          segments[i - 1].interjection!.agentRole,
+                        )
+                      : undefined;
+
+                    return (
+                      <InterjectionBlock
+                        key={`${message.id}-interjection-${i}`}
+                        agentName={segments[i - 1].interjection!.agentName}
+                        agentRole={segments[i - 1].interjection!.agentRole}
+                        agentAvatar={interjectionAgent?.avatar ?? segments[i - 1].interjection!.agentAvatar ?? 'AI'}
+                        agentColour={interjectionAgent?.colour ?? segments[i - 1].interjection!.agentColour}
+                        content={segment.text}
+                      />
+                    );
+                  }
+
+                  return null;
                 })}
               </div>
             );
           }
+
+          const textContent = message.parts
+            ?.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+            .map((p) => p.text)
+            .join('') ?? '';
 
           return (
             <MessageBubble

@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { ConversationMode } from '@/lib/types/council';
 import { CircleHelp } from 'lucide-react';
+import { useI18n } from '@/lib/i18n';
 
 interface ChatSettingsProps {
   agents: AgentConfig[];
@@ -40,6 +41,7 @@ export function ChatSettings({
   onPrimaryAgentChange,
   onSelectedAgentIdsChange,
 }: ChatSettingsProps) {
+  const { t } = useI18n();
   const toggleAgent = (agentId: string) => {
     if (selectedAgentIds.includes(agentId)) {
       // Don't allow deselecting the primary agent.
@@ -65,7 +67,7 @@ export function ChatSettings({
         <div className="w-full max-w-3xl flex items-start justify-center gap-4">
           <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
             <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mr-1">
-              Mode
+              {t.mode}
             </span>
             <Button
               size="sm"
@@ -73,7 +75,7 @@ export function ChatSettings({
               className="h-7 text-xs px-2.5"
               onClick={() => onModeChange('council')}
             >
-              Council
+              {t.council}
             </Button>
             <Button
               size="sm"
@@ -81,7 +83,7 @@ export function ChatSettings({
               className="h-7 text-xs px-2.5"
               onClick={() => onModeChange('round-robin')}
             >
-              Round Robin
+              {t.roundRobin}
             </Button>
           </div>
 
@@ -89,7 +91,7 @@ export function ChatSettings({
 
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mr-1 shrink-0 mt-0.5">
-              Agents
+              {t.agentsLabel}
             </span>
             {agents.map((agent) => {
               const isSelected = selectedAgentIds.includes(agent.id);
@@ -118,7 +120,7 @@ export function ChatSettings({
                     <span className="font-medium">{agent.name}</span>
                     {isPrimary && (
                       <Badge variant="secondary" className="text-[8px] px-1 py-0 h-3.5 leading-none">
-                        1st
+                        {t.first}
                       </Badge>
                     )}
                   </TooltipTrigger>
@@ -127,11 +129,11 @@ export function ChatSettings({
                       <p className="font-medium">
                         {agent.name}
                         {isPrimary ? ' (Primary)' : ''}
-                        {!isSelected ? ' (Inactive)' : ''}
+                        {!isSelected ? ` (${t.inactive})` : ''}
                       </p>
-                      <p className="text-background/80">Model: {agent.modelId}</p>
+                      <p className="text-background/80">{t.modelLabel}: {agent.modelId}</p>
                       <p className="text-background/70">
-                        Click to toggle. Double-click to set primary.
+                        {t.clickToggleHint}
                       </p>
                     </div>
                   </TooltipContent>
@@ -147,36 +149,35 @@ export function ChatSettings({
               render={<Button size="sm" variant="outline" className="h-7 px-2.5 shrink-0" />}
             >
               <CircleHelp className="size-3.5" />
-              <span>Help</span>
+              <span>{t.help}</span>
             </DialogTrigger>
             <DialogContent className="max-w-xl sm:max-w-xl">
               <DialogHeader>
-                <DialogTitle>How The Council Works</DialogTitle>
+                <DialogTitle>{t.howCouncilWorks}</DialogTitle>
                 <DialogDescription>
-                  The Council is a multi-agent research chat where multiple AI agents collaborate on one conversation.
+                  {t.howCouncilWorksDesc}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-3 text-sm">
                 <div className="space-y-1">
-                  <h4 className="font-medium">Council Mode (default)</h4>
+                  <h4 className="font-medium">{t.council} Mode</h4>
                   <p className="text-muted-foreground">
-                    Your selected primary agent answers directly, while other active agents stay silent unless they have a
-                    meaningful disagreement or critical addition.
+                    {t.councilModeHelp}
                   </p>
                 </div>
 
                 <div className="space-y-1">
-                  <h4 className="font-medium">Round Robin Mode</h4>
+                  <h4 className="font-medium">{t.roundRobin} Mode</h4>
                   <p className="text-muted-foreground">
-                    Each active agent responds in sequence so you can compare perspectives from every participant.
+                    {t.roundRobinHelp}
                   </p>
                 </div>
 
                 <div className="space-y-1">
-                  <h4 className="font-medium">Agent Controls</h4>
+                  <h4 className="font-medium">{t.agentsLabel}</h4>
                   <p className="text-muted-foreground">
-                    Use the chips above to include or exclude agents. Double-click a chip to make that agent primary.
+                    {t.agentControlsHelp}
                   </p>
                 </div>
               </div>

@@ -2,9 +2,70 @@ import type { ProviderId } from '@/lib/types/config';
 
 export async function testApiKey(
   providerId: ProviderId,
-  apiKey: string
+  apiKey: string,
+  baseURL?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    if (baseURL || !['openai', 'anthropic', 'google', 'openrouter'].includes(providerId)) {
+      if (!baseURL) {
+        return { success: false, error: 'Base URL is required for custom API provider' };
+      }
+      const cleanBaseUrl = baseURL.replace(/\/+$/, '');
+      const headers: Record<string, string> = {};
+      if (apiKey?.trim()) {
+        headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+      }
+
+      // 1. Try GET /models first
+      try {
+        const res = await fetch(`${cleanBaseUrl}/models`, {
+          method: 'GET',
+          headers,
+        });
+        if (res.ok) {
+          return { success: true };
+        }
+        if (res.status === 401 || res.status === 403) {
+          return { success: false, error: `Invalid API key (HTTP ${res.status})` };
+        }
+      } catch {
+        // Fall back to /chat/completions check below
+      }
+
+      // 2. Try POST /chat/completions test
+      try {
+        const res = await fetch(`${cleanBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'test',
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        });
+
+        if (res.status === 401 || res.status === 403) {
+          return { success: false, error: `Invalid API key (HTTP ${res.status})` };
+        }
+        if (res.status === 404) {
+          return {
+            success: false,
+            error: 'Endpoint not found (404). Please verify your Base URL (e.g. check if /v1 is required).',
+          };
+        }
+        // If 200 or 400 (e.g. model not found), server is responding and authenticated
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error: `Could not connect to ${cleanBaseUrl}: ${err instanceof Error ? err.message : 'Connection failed'}`,
+        };
+      }
+    }
+
     switch (providerId) {
       case 'openai': {
         const response = await fetch('https://api.openai.com/v1/models', {

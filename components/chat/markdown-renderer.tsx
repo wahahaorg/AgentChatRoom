@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -11,7 +12,9 @@ interface MarkdownRendererProps {
   content: string;
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+// Memoized: during streaming the message list re-renders on every token,
+// but past messages' content never changes — skip re-parsing their markdown.
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <div className="prose prose-sm dark:prose-invert min-w-0 max-w-none break-words">
       <ReactMarkdown
@@ -96,4 +99,4 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
       </ReactMarkdown>
     </div>
   );
-}
+});

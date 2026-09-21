@@ -11,9 +11,10 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { PROVIDERS, getModels, getModel } from '@/lib/providers/provider-registry';
 import { AGENT_PRESETS } from '@/lib/agents/presets';
+import { useI18n } from '@/lib/i18n';
 import { nanoid } from 'nanoid';
 import type { AgentConfig, ThinkingConfig } from '@/lib/types/agents';
-import type { ProviderId } from '@/lib/types/config';
+import type { CustomProviderConfig, ProviderId } from '@/lib/types/config';
 
 const AGENT_COLOURS = [
   '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6',
@@ -22,13 +23,24 @@ const AGENT_COLOURS = [
 
 interface AgentConfiguratorProps {
   agents: AgentConfig[];
-  apiKeys: Partial<Record<ProviderId, string>>;
+  apiKeys: Partial<Record<string, string>>;
+  customProviders?: CustomProviderConfig[];
   onAdd: (agent: AgentConfig) => Promise<void>;
   onRemove: (agentId: string) => Promise<void>;
+  onUpdate: (agent: AgentConfig) => Promise<void>;
 }
 
-export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentConfiguratorProps) {
+export function AgentConfigurator({
+  agents,
+  apiKeys,
+  customProviders = [],
+  onAdd,
+  onRemove,
+  onUpdate,
+}: AgentConfiguratorProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -37,12 +49,25 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
   const [avatar, setAvatar] = useState('AI');
   const [thinkingValue, setThinkingValue] = useState('');
 
-  const availableProviders = Object.entries(PROVIDERS).filter(
-    ([id]) => apiKeys[id as ProviderId]
-  );
+  const standardProviders = Object.entries(PROVIDERS)
+    .filter(([id]) => apiKeys[id])
+    .map(([id, provider]) => ({ id, name: provider.name, isCustom: false }));
 
-  const models = providerId ? getModels(providerId) : [];
-  const selectedModel = providerId && modelId ? getModel(providerId, modelId) : undefined;
+  const customProviderOptions = customProviders.map((cp) => ({
+    id: cp.id,
+    name: `${cp.name} (自定义)`,
+    isCustom: true,
+  }));
+
+  const availableProviders = [...standardProviders, ...customProviderOptions];
+
+  const selectedCustomProvider = customProviders.find((cp) => cp.id === providerId);
+  const isCustomProvider = Boolean(selectedCustomProvider);
+
+  const models = (!isCustomProvider && providerId) ? getModels(providerId) : [];
+  const customModels = selectedCustomProvider?.models ?? [];
+  const showCustomModelInput = isCustomProvider && customModels.length === 0;
+  const selectedModel = (!isCustomProvider && providerId && modelId) ? getModel(providerId, modelId) : undefined;
   const thinkingCapability = selectedModel?.thinking ?? selectedModel?.reasoning;
   const thinkingLabel = thinkingCapability?.type === 'effort'
     ? 'Reasoning Effort'
@@ -57,10 +82,35 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
     setAvatar(preset.avatar);
   };
 
+  const resetForm = () => {
+    setEditingId(null);
+    setName('');
+    setRole('');
+    setSystemPrompt('');
+    setProviderId('');
+    setModelId('');
+    setAvatar('AI');
+    setThinkingValue('');
+  };
+
+  const openEditDialog = (agent: AgentConfig) => {
+    setEditingId(agent.id);
+    setName(agent.name);
+    setRole(agent.role);
+    setSystemPrompt(agent.systemPrompt);
+    setProviderId(agent.providerId);
+    setModelId(agent.modelId);
+    setAvatar(agent.avatar);
+    setThinkingValue(agent.thinking ? String(agent.thinking.value) : '');
+    setOpen(true);
+  };
+
   const handleAdd = async () => {
     if (!name || !providerId || !modelId) return;
 
-    const colour = AGENT_COLOURS[agents.length % AGENT_COLOURS.length];
+    const colour = editingId
+      ? (agents.find((a) => a.id === editingId)?.colour ?? AGENT_COLOURS[agents.length % AGENT_COLOURS.length])
+      : AGENT_COLOURS[agents.length % AGENT_COLOURS.length];
 
     let thinking: ThinkingConfig | undefined;
     if (thinkingCapability) {
@@ -73,7 +123,7 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
     }
 
     const agent: AgentConfig = {
-      id: nanoid(),
+      id: editingId ?? nanoid(),
       name,
       role,
       systemPrompt,
@@ -84,34 +134,32 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
       ...(thinking ? { thinking } : {}),
     };
 
-    await onAdd(agent);
+    if (editingId) {
+      await onUpdate(agent);
+    } else {
+      await onAdd(agent);
+    }
     setOpen(false);
-    setName('');
-    setRole('');
-    setSystemPrompt('');
-    setProviderId('');
-    setModelId('');
-    setAvatar('AI');
-    setThinkingValue('');
+    resetForm();
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Agents ({agents.length})</h3>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <h3 className="text-lg font-semibold">{t.agents} ({agents.length})</h3>
+        <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) resetForm(); }}>
           <DialogTrigger
             render={<Button size="sm" disabled={availableProviders.length === 0} />}
           >
-            Add Agent
+            {t.addAgent}
           </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Add Agent</DialogTitle>
+              <DialogTitle>{editingId ? (t.editAgent ?? '编辑 Agent') : t.addAgent}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 pt-2">
               <div>
-                <Label className="text-xs text-muted-foreground mb-2 block">Quick start from preset</Label>
+                <Label className="text-xs text-muted-foreground mb-2 block">{t.quickStart}</Label>
                 <div className="flex flex-wrap gap-1.5">
                   {AGENT_PRESETS.map((preset) => (
                     <Badge
@@ -128,7 +176,7 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
 
               <div className="grid grid-cols-[auto_1fr] gap-3 items-start">
                 <div>
-                  <Label htmlFor="avatar">Avatar</Label>
+                  <Label htmlFor="avatar">{t.avatar}</Label>
                   <Input
                     id="avatar"
                     value={avatar}
@@ -136,50 +184,58 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
                     className="w-16 text-center text-lg"
                     maxLength={2}
                   />
+                  <p className="text-[11px] text-muted-foreground mt-1">{t.avatarNote}</p>
                 </div>
                 <div>
-                  <Label htmlFor="name">Name</Label>
+                  <Label htmlFor="name">{t.name}</Label>
                   <Input
                     id="name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="e.g. Research Analyst"
                   />
+                  <p className="text-[11px] text-muted-foreground mt-1">{t.nameNote}</p>
                 </div>
               </div>
 
               <div>
-                <Label htmlFor="role">Role</Label>
+                <Label htmlFor="role">{t.role}</Label>
                 <Input
                   id="role"
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
                   placeholder="e.g. Thorough analysis and evidence assessment"
                 />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  {t.roleNote}
+                </p>
               </div>
 
               <div>
-                <Label htmlFor="provider">Provider</Label>
+                <Label htmlFor="provider">{t.provider}</Label>
                 <Select value={providerId} onValueChange={(v) => { setProviderId(v ?? ''); setModelId(''); setThinkingValue(''); }}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select provider" />
+                    <SelectValue placeholder={t.selectProvider} />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableProviders.map(([id, provider]) => (
-                      <SelectItem key={id} value={id}>
-                        {provider.name}
+                    {availableProviders.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  {t.providerNote}
+                </p>
               </div>
 
               {providerId && models.length > 0 && (
                 <div>
-                  <Label htmlFor="model">Model</Label>
+                  <Label htmlFor="model">{t.model}</Label>
                   <Select value={modelId} onValueChange={(v) => { setModelId(v ?? ''); setThinkingValue(''); }}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select model" />
+                      <SelectValue placeholder={t.selectModel} />
                     </SelectTrigger>
                     <SelectContent>
                       {models.map((model) => (
@@ -195,6 +251,45 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    {t.modelNote}
+                  </p>
+                </div>
+              )}
+
+              {isCustomProvider && customModels.length > 0 && (
+                <div>
+                  <Label htmlFor="custom-model">模型 (Model)</Label>
+                  <Select value={modelId} onValueChange={(v) => { setModelId(v ?? ''); }}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t.selectModel} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customModels.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    {t.customModelFrom(selectedCustomProvider?.name ?? '')}
+                  </p>
+                </div>
+              )}
+
+              {showCustomModelInput && (
+                <div>
+                  <Label htmlFor="custom-model-id">{t.manualModelId}</Label>
+                  <Input
+                    id="custom-model-id"
+                    value={modelId}
+                    onChange={(e) => setModelId(e.target.value)}
+                    placeholder="deepseek-chat"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    {t.manualModelIdNote}
+                  </p>
                 </div>
               )}
 
@@ -252,18 +347,18 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
               )}
 
               <div>
-                <Label htmlFor="system-prompt">System Prompt</Label>
+                <Label htmlFor="system-prompt">{t.systemPrompt}</Label>
                 <Textarea
                   id="system-prompt"
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
-                  placeholder="Instructions for this agent's behaviour..."
+                  placeholder={t.systemPromptPlaceholder}
                   rows={6}
                 />
               </div>
 
               <Button onClick={handleAdd} disabled={!name || !providerId || !modelId} className="w-full">
-                Add Agent
+                {editingId ? (t.save ?? '保存') : t.addAgent}
               </Button>
             </div>
           </DialogContent>
@@ -272,7 +367,7 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
 
       {availableProviders.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          Add at least one API key above before configuring agents.
+          {t.needApiKeyFirst}
         </p>
       )}
 
@@ -293,14 +388,23 @@ export function AgentConfigurator({ agents, apiKeys, onAdd, onRemove }: AgentCon
                     <p className="text-xs text-muted-foreground">{agent.role}</p>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() => onRemove(agent.id)}
-                >
-                  Remove
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => openEditDialog(agent)}
+                  >
+                    {t.edit}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => onRemove(agent.id)}
+                  >
+                    {t.remove}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="px-4 pb-3">

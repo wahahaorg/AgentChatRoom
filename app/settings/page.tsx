@@ -2,16 +2,20 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { ApiKeyManager } from '@/components/settings/api-key-manager';
+import { CustomProviderManager } from '@/components/settings/custom-provider-manager';
 import { AgentConfigurator } from '@/components/settings/agent-configurator';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
+import { useI18n } from '@/lib/i18n';
 import type { ProviderId, CouncilConfig } from '@/lib/types/config';
 import type { AgentConfig } from '@/lib/types/agents';
 import Link from 'next/link';
 
 export default function SettingsPage() {
+  const { t } = useI18n();
   const [apiKeys, setApiKeys] = useState<Partial<Record<ProviderId, string>>>({});
+  const [customProviders, setCustomProviders] = useState<CouncilConfig['customProviders']>([]);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -20,9 +24,10 @@ export default function SettingsPage() {
       const res = await fetch('/api/config');
       const data = (await res.json()) as CouncilConfig;
       setApiKeys(data.apiKeys ?? {});
+      setCustomProviders(data.customProviders ?? []);
       setAgents(data.agents ?? []);
     } catch {
-      toast.error('Failed to load configuration');
+      toast.error(t.loadFailed);
     } finally {
       setLoading(false);
     }
@@ -40,10 +45,10 @@ export default function SettingsPage() {
         body: JSON.stringify({ apiKeys: { [providerId]: apiKey } }),
       });
       if (!res.ok) throw new Error('Failed to save');
-      toast.success(`${providerId} API key saved`);
+      toast.success(t.keySaved(providerId));
       await fetchConfig();
     } catch {
-      toast.error('Failed to save API key');
+      toast.error(t.saveFailed);
     }
   };
 
@@ -55,10 +60,10 @@ export default function SettingsPage() {
         body: JSON.stringify({ apiKeys: { [providerId]: '' } }),
       });
       if (!res.ok) throw new Error('Failed to remove');
-      toast.success(`${providerId} API key removed`);
+      toast.success(t.keyRemoved);
       await fetchConfig();
     } catch {
-      toast.error('Failed to remove API key');
+      toast.error(t.removeFailed);
     }
   };
 
@@ -71,10 +76,62 @@ export default function SettingsPage() {
     return res.json();
   };
 
+  const handleSaveProvider = async (provider: CouncilConfig['customProviders'][number]) => {
+    try {
+      const config = await (await fetch('/api/config')).json();
+      const existing = (config.customProviders ?? []).filter(
+        (cp: CouncilConfig['customProviders'][number]) => cp.id !== provider.id
+      );
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customProviders: [...existing, provider] }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      toast.success(t.customSaved(provider.name));
+      await fetchConfig();
+    } catch {
+      toast.error(t.customSaveFailed);
+    }
+  };
+
+  const handleRemoveProvider = async (providerId: string) => {
+    try {
+      const config = await (await fetch('/api/config')).json();
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customProviders: (config.customProviders ?? []).filter(
+            (cp: CouncilConfig['customProviders'][number]) => cp.id !== providerId
+          ),
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to remove');
+      toast.success(t.customRemoved);
+      await fetchConfig();
+    } catch {
+      toast.error(t.customRemoveFailed);
+    }
+  };
+
+  const handleTestProvider = async (
+    providerId: string,
+    apiKey: string,
+    baseURL: string
+  ) => {
+    const res = await fetch('/api/config/test-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId, apiKey, baseURL, isCustom: true }),
+    });
+    return res.json();
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-muted-foreground">Loading settings...</p>
+        <p className="text-muted-foreground">{t.loading}</p>
       </div>
     );
   }
@@ -84,21 +141,21 @@ export default function SettingsPage() {
       <div className="mx-auto max-w-2xl px-4 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold">Settings</h1>
+            <h1 className="text-2xl font-bold">{t.settingsTitle}</h1>
             <p className="text-muted-foreground mt-1">
-              Manage your API keys and preferences
+              {t.settingsSubtitle}
             </p>
           </div>
           <Link href="/chat">
-            <Button variant="outline">Back to Chat</Button>
+            <Button variant="outline">{t.backToChat}</Button>
           </Link>
         </div>
 
         <div className="space-y-8">
           <section>
-            <h2 className="text-lg font-semibold mb-4">API Keys</h2>
+            <h2 className="text-lg font-semibold mb-4">{t.apiKeys}</h2>
             <p className="text-sm text-muted-foreground mb-4">
-              Keys are stored locally on your machine only. They are never sent anywhere except to the respective provider&apos;s API.
+              {t.apiKeysNote}
             </p>
             <ApiKeyManager
               apiKeys={apiKeys}
@@ -111,9 +168,21 @@ export default function SettingsPage() {
           <Separator />
 
           <section>
+            <CustomProviderManager
+              customProviders={customProviders}
+              onSaveProvider={handleSaveProvider}
+              onRemoveProvider={handleRemoveProvider}
+              onTestProvider={handleTestProvider}
+            />
+          </section>
+
+          <Separator />
+
+          <section>
             <AgentConfigurator
               agents={agents}
               apiKeys={apiKeys}
+              customProviders={customProviders}
               onAdd={async (agent) => {
                 try {
                   const config = await (await fetch('/api/config')).json();
@@ -126,10 +195,10 @@ export default function SettingsPage() {
                     }),
                   });
                   if (!res.ok) throw new Error('Failed to add agent');
-                  toast.success(`${agent.name} added`);
+                  toast.success(t.agentAdded(agent.name));
                   await fetchConfig();
                 } catch {
-                  toast.error('Failed to add agent');
+                  toast.error(t.addAgentFailed);
                 }
               }}
               onRemove={async (agentId) => {
@@ -147,10 +216,29 @@ export default function SettingsPage() {
                     }),
                   });
                   if (!res.ok) throw new Error('Failed to remove agent');
-                  toast.success('Agent removed');
+                  toast.success(t.agentRemoved);
                   await fetchConfig();
                 } catch {
-                  toast.error('Failed to remove agent');
+                  toast.error(t.removeAgentFailed);
+                }
+              }}
+              onUpdate={async (agent) => {
+                try {
+                  const config = await (await fetch('/api/config')).json();
+                  const res = await fetch('/api/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      agents: (config.agents ?? []).map((a: AgentConfig) =>
+                        a.id === agent.id ? agent : a
+                      ),
+                    }),
+                  });
+                  if (!res.ok) throw new Error('Failed to update agent');
+                  toast.success(t.agentAdded(agent.name));
+                  await fetchConfig();
+                } catch {
+                  toast.error(t.addAgentFailed);
                 }
               }}
             />

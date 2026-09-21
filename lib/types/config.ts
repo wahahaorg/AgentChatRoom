@@ -1,4 +1,12 @@
-export type ProviderId = 'openai' | 'anthropic' | 'google' | 'openrouter';
+export type ProviderId = 'openai' | 'anthropic' | 'google' | 'openrouter' | (string & {});
+
+export interface CustomProviderConfig {
+  id: string;
+  name: string;
+  baseURL: string;
+  apiKey?: string;
+  models: string[];
+}
 
 export interface OrchestrationConfig {
   maxInterjectionDepth: number;
@@ -12,7 +20,8 @@ export interface OrchestrationConfig {
 }
 
 export interface CouncilConfig {
-  apiKeys: Partial<Record<ProviderId, string>>;
+  apiKeys: Partial<Record<string, string>>;
+  customProviders: CustomProviderConfig[];
   agents: import('./agents').AgentConfig[];
   defaultMode: import('./council').ConversationMode;
   defaultPrimaryAgentId: string | null;
@@ -32,8 +41,10 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
 
 export const DEFAULT_CONFIG: CouncilConfig = {
   apiKeys: {},
+  customProviders: [],
   agents: [],
   defaultMode: 'council',
   defaultPrimaryAgentId: null,
   orchestration: DEFAULT_ORCHESTRATION_CONFIG,
 };
+

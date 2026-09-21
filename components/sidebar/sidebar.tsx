@@ -9,17 +9,25 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { LocaleToggle } from '@/components/locale-toggle';
+import { CreateGroupDialog } from '@/components/chat/create-group-dialog';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
 import type { ConversationSummary } from '@/lib/types/council';
+import type { AgentConfig } from '@/lib/types/agents';
+import type { ConversationMode } from '@/lib/types/council';
 
 interface SidebarProps {
   activeConversationId?: string;
+  defaultMode?: ConversationMode;
 }
 
-export function Sidebar({ activeConversationId }: SidebarProps) {
+export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
+  const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
@@ -43,6 +51,13 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations, pathname]);
+
+  useEffect(() => {
+    fetch('/api/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setAgents(data?.agents ?? []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const saved = window.localStorage.getItem('council.sidebar.collapsed');
@@ -143,7 +158,7 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
   };
 
   // Group conversations by date
-  const grouped = groupConversations(conversations);
+  const grouped = groupConversations(conversations, t);
 
   return (
     <div
@@ -186,14 +201,19 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
               : 'w-full justify-start gap-2.5 px-3 text-sm font-medium',
           )}
           onClick={handleNewChat}
-          aria-label="New chat"
-          title="New chat"
+          aria-label={t.newChat}
+          title={t.newChat}
         >
           <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm transition-transform group-hover:scale-105">
             <Plus className="h-3.5 w-3.5" strokeWidth={2.4} />
           </span>
-          {!isCollapsed && <span>New chat</span>}
+          {!isCollapsed && <span>{t.newChat}</span>}
         </Button>
+        {!isCollapsed && (
+          <div className="mt-2">
+            <CreateGroupDialog agents={agents} defaultMode={defaultMode} />
+          </div>
+        )}
       </div>
 
       <Separator />
@@ -228,10 +248,10 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
         ) : (
           <div className="p-2">
             {loading ? (
-              <p className="text-xs text-muted-foreground px-2 py-4">Loading...</p>
+              <p className="text-xs text-muted-foreground px-2 py-4">{t.loading}</p>
             ) : conversations.length === 0 ? (
               <p className="text-xs text-muted-foreground px-2 py-4">
-                No conversations yet. Start a new chat!
+                {t.noConversations}
               </p>
             ) : (
               Object.entries(grouped).map(([label, convs]) => (
@@ -285,7 +305,7 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
                           <div className="min-w-0">
                             <p className="truncate text-xs font-medium">{conv.title}</p>
                             <p className="text-[10px] text-muted-foreground">
-                              {conv.messageCount} message{conv.messageCount !== 1 ? 's' : ''} / {conv.mode}
+                              {t.messagesCount(conv.messageCount)} / {conv.mode}
                             </p>
                           </div>
                         )}
@@ -297,7 +317,7 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
                           onClick={handleCancelRename}
                           data-rename-action="cancel"
                           className="text-muted-foreground hover:text-foreground transition-colors p-1"
-                          title="Cancel rename"
+                          title={t.cancelRename}
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>
@@ -307,7 +327,7 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
                             type="button"
                             onClick={(e) => handleStartRename(e, conv.id, conv.title)}
                             className="text-muted-foreground hover:text-foreground transition-colors p-1"
-                            title="Rename conversation"
+                            title={t.renameConversation}
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
@@ -315,7 +335,7 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
                             type="button"
                             onClick={(e) => handleDeleteConversation(e, conv.id)}
                             className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                            title="Delete conversation"
+                            title={t.deleteConversation}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -336,12 +356,14 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
         <div className={cn('flex items-center gap-1', isCollapsed ? 'justify-center' : 'justify-between')}>
           <ThemeToggle compact={isCollapsed} className={cn(!isCollapsed && 'flex-1')} />
 
+          <LocaleToggle compact={isCollapsed} />
+
           <Button
             variant="ghost"
             size="icon-sm"
             onClick={handleToggleCollapsed}
-            aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={isCollapsed ? t.expandSidebar : t.collapseSidebar}
+            title={isCollapsed ? t.expandSidebar : t.collapseSidebar}
           >
             {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
           </Button>
@@ -352,10 +374,10 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
             variant="outline"
             size={isCollapsed ? 'icon-sm' : 'sm'}
             className={cn(!isCollapsed && 'w-full')}
-            aria-label="Settings"
-            title="Settings"
+            aria-label={t.settings}
+            title={t.settings}
           >
-            {isCollapsed ? <Settings className="h-3.5 w-3.5" /> : 'Settings'}
+            {isCollapsed ? <Settings className="h-3.5 w-3.5" /> : t.settings}
           </Button>
         </Link>
       </div>
@@ -365,6 +387,7 @@ export function Sidebar({ activeConversationId }: SidebarProps) {
 
 function groupConversations(
   conversations: ConversationSummary[],
+  t: ReturnType<typeof useI18n>['t'],
 ): Record<string, ConversationSummary[]> {
   const groups: Record<string, ConversationSummary[]> = {};
   const now = new Date();
@@ -375,11 +398,11 @@ function groupConversations(
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
     let label: string;
-    if (diffDays === 0) label = 'Today';
-    else if (diffDays === 1) label = 'Yesterday';
-    else if (diffDays < 7) label = 'This Week';
-    else if (diffDays < 30) label = 'This Month';
-    else label = 'Older';
+    if (diffDays === 0) label = t.today;
+    else if (diffDays === 1) label = t.yesterday;
+    else if (diffDays < 7) label = t.thisWeek;
+    else if (diffDays < 30) label = t.thisMonth;
+    else label = t.older;
 
     if (!groups[label]) groups[label] = [];
     groups[label].push(conv);

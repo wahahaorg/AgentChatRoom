@@ -8,6 +8,7 @@ import { MessageList } from './message-list';
 import { MessageInput } from './message-input';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { SessionConfig } from '@/lib/types/council';
+import { useI18n } from '@/lib/i18n';
 
 interface CouncilStatusData {
   phase: 'gate-check' | 'interjections' | 'round-robin' | 'done';
@@ -44,6 +45,7 @@ export function ChatContainer({
   initialMessages,
   onConversationCreated,
 }: ChatContainerProps) {
+  const { t } = useI18n();
   const [councilStatusMessage, setCouncilStatusMessage] = useState('');
   const [isCouncilProcessing, setIsCouncilProcessing] = useState(false);
   const activeConversationId = useRef<string | undefined>(conversationId);
@@ -76,7 +78,7 @@ export function ChatContainer({
     onError: (err) => {
       setIsCouncilProcessing(false);
       setCouncilStatusMessage('');
-      toast.error(err.message || 'Chat request failed');
+      toast.error(err.message || t.chatFailed);
     },
   });
 
@@ -151,14 +153,21 @@ export function ChatContainer({
     clearError();
   }, [error, clearError]);
 
-  const handleSend = (text: string, files?: FileList) => {
+  const handleSend = (text: string, files?: FileList, mentionedAgentIds?: string[]) => {
     if (!text.trim() && (!files || files.length === 0)) return;
     setIsCouncilProcessing(true);
-    setCouncilStatusMessage('Generating primary response...');
+    setCouncilStatusMessage(t.generatingResponse);
     pendingSave.current = false; // Will be set to true when done event arrives
     sendMessage(
       { text, ...(files && files.length > 0 ? { files } : {}) },
-      { body: { sessionConfig } },
+      {
+        body: {
+          sessionConfig,
+          ...(mentionedAgentIds && mentionedAgentIds.length > 0
+            ? { mentionedAgentIds }
+            : {}),
+        },
+      },
     );
   };
 
@@ -188,10 +197,11 @@ export function ChatContainer({
             isStreaming={isStreaming}
             statusText={councilStatusMessage}
             disabled={!primaryAgent}
+            agents={allAgents.filter((a) => sessionConfig.agentIds.includes(a.id))}
             placeholder={
               primaryAgent
-                ? `Message ${primaryAgent.name}...`
-                : 'Configure an agent in Settings first...'
+                ? t.messagePlaceholder(primaryAgent.name)
+                : t.configureAgentFirst
             }
           />
         </div>

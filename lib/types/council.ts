@@ -31,6 +31,11 @@ export interface SessionConfig {
   conversationId?: string;
 }
 
+/** Agent IDs @-mentioned in the latest user message. */
+export interface MentionData {
+  mentionedAgentIds: string[];
+}
+
 export interface AgentStatus {
   agentId: string;
   agentName: string;
