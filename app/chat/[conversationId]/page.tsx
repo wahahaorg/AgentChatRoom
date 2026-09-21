@@ -31,7 +31,11 @@ export default function ConversationPage() {
 
       if (convRes.ok) {
         const conv = (await convRes.json()) as Conversation;
-        setConversation(conv);
+        // Older conversations may have duplicated assistant messages (same id
+        // re-emitted per discussion wave) — keep only the latest version.
+        const byId = new Map<string, unknown>();
+        for (const m of conv.messages ?? []) byId.set((m as { id: string }).id, m);
+        setConversation({ ...conv, messages: [...byId.values()] as typeof conv.messages });
         setPrimaryAgentId(conv.primaryAgentId || config.agents?.[0]?.id || null);
         setMode(conv.mode);
         setSelectedAgentIds(conv.agentIds.length > 0 ? conv.agentIds : (config.agents ?? []).map((a) => a.id));

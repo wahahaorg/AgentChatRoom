@@ -299,8 +299,15 @@ function hasPersistableContent(message: UIMessage): boolean {
 }
 
 function filterPersistableMessages(messages: UIMessage[]): UIMessage[] {
-  return messages.filter((message) => {
+  const filtered = messages.filter((message) => {
     if (message.role !== 'assistant') return true;
     return hasPersistableContent(message);
   });
+
+  // The AI SDK can re-emit a wave's assistant message under the same id when
+  // a new discussion round starts mid-conversation — keep only the latest
+  // version of each id so stored interjections don't render twice.
+  const latestById = new Map<string, number>();
+  filtered.forEach((message, index) => latestById.set(message.id, index));
+  return filtered.filter((message, index) => latestById.get(message.id) === index);
 }
