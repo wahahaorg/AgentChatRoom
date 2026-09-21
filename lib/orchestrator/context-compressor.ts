@@ -4,7 +4,7 @@ import type { CouncilConfig } from '@/lib/types/config';
 import { createModelInstance } from '@/lib/providers/provider-factory';
 
 /** Rough token estimate: ~4 chars per token for mixed CJK/English text. */
-function estimateTokens(messages: ModelMessage[]): number {
+export function estimateTokens(messages: ModelMessage[]): number {
   let chars = 0;
   for (const message of messages) {
     if (typeof message.content === 'string') {

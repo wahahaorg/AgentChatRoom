@@ -14,6 +14,7 @@ interface MessageInputProps {
   onSend: (message: string, files?: FileList, mentionedAgentIds?: string[]) => void;
   onStop?: () => void;
   isStreaming?: boolean;
+  allowSendWhileStreaming?: boolean;
   statusText?: string;
   disabled?: boolean;
   placeholder?: string;
@@ -24,6 +25,7 @@ export function MessageInput({
   onSend,
   onStop,
   isStreaming,
+  allowSendWhileStreaming,
   statusText,
   disabled,
   placeholder,
@@ -37,6 +39,10 @@ export function MessageInput({
   const [mentionedAgents, setMentionedAgents] = useState<AgentConfig[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Free-chat mode: typing/sending stays open while the group discusses.
+  const inputLocked = Boolean(disabled);
+  const hasContent = Boolean(input.trim() || files.length > 0);
 
   const mentionableAgents = mentionQuery === null
     ? []
@@ -68,7 +74,7 @@ export function MessageInput({
   };
 
   const handleSend = useCallback(() => {
-    if (isStreaming) return;
+    if (isStreaming && !allowSendWhileStreaming) return;
 
     const trimmed = input.trim();
     if (!trimmed && files.length === 0) return;
@@ -89,10 +95,10 @@ export function MessageInput({
     setFiles([]);
     setMentionedAgents([]);
     setMentionQuery(null);
-  }, [input, files, isStreaming, onSend, mentionedAgents]);
+  }, [input, files, isStreaming, allowSendWhileStreaming, onSend, mentionedAgents]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (isStreaming) return;
+    if (isStreaming && !allowSendWhileStreaming) return;
 
     if (mentionQuery !== null && e.key === 'Escape') {
       e.preventDefault();
@@ -244,11 +250,11 @@ export function MessageInput({
             window.setTimeout(() => setMentionQuery(null), 150);
           }}
           placeholder={placeholder ?? t.typeMessage}
-          disabled={disabled || isStreaming}
+          disabled={inputLocked}
           className="min-h-[40px] max-h-[200px] resize-none border-0 px-0 py-2.5 leading-5 focus-visible:ring-0 focus-visible:ring-offset-0"
           rows={1}
         />
-        {isStreaming ? (
+        {isStreaming && !hasContent ? (
           <Button
             type="button"
             size="icon"
@@ -266,17 +272,26 @@ export function MessageInput({
             size="icon"
             className="h-10 w-10 shrink-0"
             onClick={handleSend}
-            disabled={disabled || (!input.trim() && files.length === 0)}
-            aria-label={t.sendMessage}
-            title={t.sendMessage}
+            disabled={disabled || !hasContent}
+            aria-label={isStreaming ? '发送并插话' : t.sendMessage}
+            title={isStreaming ? '发送并插话' : t.sendMessage}
           >
-            <SendHorizontal className="h-4 w-4" />
+            <SendHorizontal className="h-3.5 w-3.5" />
           </Button>
         )}
       </div>
       {isStreaming && statusText && (
-        <div className="px-3 pb-3">
-          <p className="text-xs text-muted-foreground">{statusText}</p>
+        <div className="flex items-center justify-between px-3 pb-3">
+          <p className="text-xs text-muted-foreground truncate">{statusText}</p>
+          {onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="ml-2 shrink-0 text-xs text-destructive hover:underline font-medium"
+            >
+              停止讨论
+            </button>
+          )}
         </div>
       )}
       {isDragOver && (

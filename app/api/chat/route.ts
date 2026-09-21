@@ -6,7 +6,7 @@ import {
   type UIMessageStreamWriter,
 } from 'ai';
 import { readConfig } from '@/lib/storage/config-store';
-import { runCouncilMode, runRoundRobinMode } from '@/lib/orchestrator/council-orchestrator';
+import { runCouncilMode, runRoundRobinMode, runFreeChatMode } from '@/lib/orchestrator/council-orchestrator';
 import type { SessionConfig } from '@/lib/types/council';
 
 interface CouncilStatusData {
@@ -90,10 +90,11 @@ function writeDoneStatus(writer: UIMessageStreamWriter): void {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { messages, sessionConfig, mentionedAgentIds } = body as {
+  const { messages, sessionConfig, mentionedAgentIds, conversationId } = body as {
     messages: UIMessage[];
     sessionConfig: SessionConfig;
     mentionedAgentIds?: string[];
+    conversationId?: string;
   };
 
   const sanitizedMessages = sanitizeIncomingMessages(messages ?? []);
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
       try {
         const ctx = {
           config,
-          sessionConfig,
+          sessionConfig: { ...sessionConfig, conversationId },
           modelMessages,
           orchestration: config.orchestration,
           mentionedAgentIds: mentionedAgentIds ?? [],
@@ -113,6 +114,8 @@ export async function POST(request: Request) {
 
         if (sessionConfig.mode === 'round-robin') {
           await runRoundRobinMode(writer, ctx);
+        } else if (sessionConfig.mode === 'free-chat') {
+          await runFreeChatMode(writer, ctx);
         } else {
           await runCouncilMode(writer, ctx);
         }

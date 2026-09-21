@@ -36,6 +36,8 @@ export const dictionaries = {
     councilModeDesc: 'Lead agent answers, others interject on disagreement',
     roundRobinMode: 'Round robin',
     roundRobinModeDesc: 'All members speak in turn',
+    freeChatMode: 'Free chat',
+    freeChatModeDesc: 'No lead — members chime in whenever they have something to say',
     creating: 'Creating...',
     create: 'Create group chat',
 
@@ -131,12 +133,14 @@ export const dictionaries = {
     emptyChat:
       'Start a conversation with your council of AI agents. Configure your agents and API keys in Settings.',
     generatingResponse: 'Generating primary response...',
+    messageQueued: 'Your message is queued — it will be sent when the current discussion round ends.',
     chatFailed: 'Chat request failed',
 
     // Chat settings bar
     mode: 'Mode',
     council: 'Council',
     roundRobin: 'Round Robin',
+    freeChat: 'Free Chat',
     agentsLabel: 'Agents',
     first: '1st',
     help: 'Help',
@@ -147,6 +151,8 @@ export const dictionaries = {
       'Your selected primary agent answers directly, while other active agents stay silent unless they have a meaningful disagreement or critical addition.',
     roundRobinHelp:
       'Each active agent responds in sequence so you can compare perspectives from every participant.',
+    freeChatHelp:
+      'No lead agent. After you post a message, members who have something to say chime in on their own — watch what the group comes up with.',
     agentControlsHelp:
       'Use the chips above to include or exclude agents. Double-click a chip to make that agent primary.',
     clickToggleHint: 'Click to toggle. Double-click to set primary.',
@@ -191,6 +197,8 @@ export const dictionaries = {
     councilModeDesc: '主答解答，其他成员有异议时插话',
     roundRobinMode: '轮流发言',
     roundRobinModeDesc: '所有成员依次发表观点',
+    freeChatMode: '自由群聊',
+    freeChatModeDesc: '没有主答，谁有话说谁插话，看他们自己能聊出什么',
     creating: '创建中...',
     create: '创建群聊',
 
@@ -278,11 +286,13 @@ export const dictionaries = {
     removeFile: '移除',
     emptyChat: '与你的 AI Agent 议会开始对话。可在设置中配置 Agent 和 API 密钥。',
     generatingResponse: '正在生成主答回复...',
+    messageQueued: '消息已排队——本轮讨论结束后发送。',
     chatFailed: '聊天请求失败',
 
     mode: '模式',
     council: '议会',
     roundRobin: '轮流发言',
+    freeChat: '自由群聊',
     agentsLabel: '成员',
     first: '主答',
     help: '帮助',
@@ -291,6 +301,7 @@ export const dictionaries = {
     councilModeHelp:
       '你选定的主答 Agent 直接回答，其他激活的 Agent 保持沉默，除非他们有重要异议或关键补充。',
     roundRobinHelp: '每个激活的 Agent 按顺序依次回答，方便你对比所有参与者的观点。',
+    freeChatHelp: '没有主答 Agent。你发消息后，谁有话说谁自己插话——看看这群人自己能聊出什么。',
     agentControlsHelp: '使用上方标签包含或排除 Agent。双击标签可将该 Agent 设为主答。',
     clickToggleHint: '单击切换。双击设置为主答。',
     inactive: '未激活',

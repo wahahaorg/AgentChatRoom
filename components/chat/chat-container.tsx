@@ -58,7 +58,7 @@ export function ChatContainer({
     [],
   );
 
-  const { messages, status, sendMessage, stop, error, clearError } = useChat({
+  const { messages, status, sendMessage, setMessages, stop, error, clearError } = useChat({
     transport,
     messages: initialMessages as UIMessage[] | undefined,
     onData: (part) => {
@@ -84,7 +84,11 @@ export function ChatContainer({
 
   const isStreaming = status === 'streaming' || status === 'submitted' || isCouncilProcessing;
 
-  // Save messages to conversation whenever streaming finishes
+  // Free-chat mode: messages sent while the group is still discussing are
+  // queued and automatically sent as the next round when the current wave ends.
+  const pendingSendRef = useRef<{ text: string; files?: FileList; mentionedAgentIds?: string[] } | null>(null);
+  const handleSendRef = useRef<(text: string, files?: FileList, mentionedAgentIds?: string[]) => void>(() => {});
+
   const saveMessages = useCallback(async (msgs: UIMessage[]) => {
     const messagesToSave = filterPersistableMessages(msgs);
     if (messagesToSave.length === 0) return;
@@ -140,11 +144,16 @@ export function ChatContainer({
     }
   }, [sessionConfig, onConversationCreated]);
 
-  // Trigger save when streaming completes
+  // Save when streaming completes; flush a queued free-chat message as the next round.
   useEffect(() => {
     if (!isStreaming && pendingSave.current && messages.length > 0) {
       pendingSave.current = false;
-      saveMessages(messages);
+      void saveMessages(messages);
+    }
+    if (!isStreaming && pendingSendRef.current) {
+      const queued = pendingSendRef.current;
+      pendingSendRef.current = null;
+      handleSendRef.current(queued.text, queued.files, queued.mentionedAgentIds);
     }
   }, [isStreaming, messages, saveMessages]);
 
@@ -155,21 +164,74 @@ export function ChatContainer({
 
   const handleSend = (text: string, files?: FileList, mentionedAgentIds?: string[]) => {
     if (!text.trim() && (!files || files.length === 0)) return;
+
+    // Free-chat mode: while the group is still discussing, push the message into
+    // the live context via the inject endpoint — the next gate check round picks
+    // it up. Falls back to the end-of-wave queue for brand-new conversations
+    // that don't have an id yet.
+    if (sessionConfig.mode === 'free-chat' && isStreaming) {
+      // Show the message in the chat immediately (locally).
+      const queuedMessage: UIMessage = {
+        id: `queued-${Date.now()}`,
+        role: 'user',
+        parts: [
+          { type: 'text', text },
+          ...Array.from(files ?? []).map((file) => ({
+            type: 'file' as const,
+            url: URL.createObjectURL(file),
+            mediaType: file.type || 'application/octet-stream',
+            filename: file.name,
+          })),
+        ],
+      };
+      setMessages((prev) => [...prev, queuedMessage]);
+      setIsCouncilProcessing(true);
+      setCouncilStatusMessage(t.messageQueued);
+
+      if (activeConversationId.current) {
+        void fetch(`/api/conversations/${activeConversationId.current}/inject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        }).catch(() => {
+          pendingSendRef.current = { text, files, mentionedAgentIds };
+        });
+      } else {
+        pendingSendRef.current = { text, files, mentionedAgentIds };
+      }
+      return;
+    }
+
+    if (isStreaming) {
+      // Other modes: stop the previous stream so the new user message can be sent immediately
+      void stop();
+      setIsCouncilProcessing(false);
+      setCouncilStatusMessage('');
+    }
+
+    pendingSave.current = false;
     setIsCouncilProcessing(true);
     setCouncilStatusMessage(t.generatingResponse);
-    pendingSave.current = false; // Will be set to true when done event arrives
-    sendMessage(
-      { text, ...(files && files.length > 0 ? { files } : {}) },
-      {
-        body: {
-          sessionConfig,
-          ...(mentionedAgentIds && mentionedAgentIds.length > 0
-            ? { mentionedAgentIds }
-            : {}),
+
+    // Send after a brief micro-delay to let the abort controller settle
+    setTimeout(() => {
+      sendMessage(
+        { text, ...(files && files.length > 0 ? { files } : {}) },
+        {
+          body: {
+            sessionConfig,
+            ...(activeConversationId.current
+              ? { conversationId: activeConversationId.current }
+              : {}),
+            ...(mentionedAgentIds && mentionedAgentIds.length > 0
+              ? { mentionedAgentIds }
+              : {}),
+          },
         },
-      },
-    );
+      );
+    }, 50);
   };
+  handleSendRef.current = handleSend;
 
   const handleStop = () => {
     void stop();
@@ -195,13 +257,16 @@ export function ChatContainer({
             onSend={handleSend}
             onStop={handleStop}
             isStreaming={isStreaming}
+            allowSendWhileStreaming={true}
             statusText={councilStatusMessage}
-            disabled={!primaryAgent}
+            disabled={sessionConfig.mode !== 'free-chat' && !primaryAgent}
             agents={allAgents.filter((a) => sessionConfig.agentIds.includes(a.id))}
             placeholder={
-              primaryAgent
-                ? t.messagePlaceholder(primaryAgent.name)
-                : t.configureAgentFirst
+              sessionConfig.mode === 'free-chat'
+                ? t.typeMessage
+                : primaryAgent
+                  ? t.messagePlaceholder(primaryAgent.name)
+                  : t.configureAgentFirst
             }
           />
         </div>

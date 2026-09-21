@@ -164,7 +164,7 @@ export function CustomProviderManager({
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto p-6">
           <DialogHeader>
             <DialogTitle>{editingId ? t.editCustomApi : t.addCustomApi}</DialogTitle>
             <DialogDescription>

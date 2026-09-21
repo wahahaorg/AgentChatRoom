@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
@@ -16,7 +17,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { ConversationMode } from '@/lib/types/council';
-import { Users } from 'lucide-react';
+import { Users, Check, MessageSquare, RefreshCw, Sparkles, CheckSquare, Square } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
 interface CreateGroupDialogProps {
@@ -44,14 +45,35 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
 
   const toggleAgent = (id: string) => {
     if (selectedIds.includes(id)) {
-      if (id === primaryAgentId) return;
+      // If deselecting the current primary agent, transfer primary to another selected agent if possible
+      if (id === primaryAgentId) {
+        const remaining = selectedIds.filter((sid) => sid !== id);
+        setPrimaryAgentId(remaining[0] ?? null);
+      }
       setSelectedIds(selectedIds.filter((sid) => sid !== id));
     } else {
       setSelectedIds([...selectedIds, id]);
+      if (!primaryAgentId) {
+        setPrimaryAgentId(id);
+      }
     }
   };
 
-  const canCreate = selectedIds.length > 0 && primaryAgentId && !creating;
+  const handleSelectAll = () => {
+    const allIds = agents.map((a) => a.id);
+    setSelectedIds(allIds);
+    if (!primaryAgentId && allIds.length > 0) {
+      setPrimaryAgentId(allIds[0]);
+    }
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds([]);
+    setPrimaryAgentId(null);
+  };
+
+  const needsPrimary = mode !== 'free-chat';
+  const canCreate = selectedIds.length > 0 && (!needsPrimary || primaryAgentId) && !creating;
 
   const handleCreate = async () => {
     if (!canCreate) return;
@@ -63,7 +85,7 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
         body: JSON.stringify({
           title: title.trim() || (locale === 'zh' ? '新群聊' : 'New group chat'),
           mode,
-          primaryAgentId,
+          primaryAgentId: needsPrimary ? primaryAgentId : (selectedIds[0] ?? null),
           agentIds: selectedIds,
         }),
       });
@@ -77,6 +99,8 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
       setCreating(false);
     }
   };
+
+  const primaryAgent = agents.find((a) => a.id === primaryAgentId);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -97,105 +121,232 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
           </Button>
         }
       />
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t.createGroup}</DialogTitle>
-          <DialogDescription>
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto p-6 gap-5">
+        <DialogHeader className="gap-1.5 pb-1 border-b">
+          <DialogTitle className="text-lg font-semibold flex items-center gap-2">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-primary">
+              <Users className="h-3.5 w-3.5" />
+            </span>
+            {t.createGroup}
+          </DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground leading-relaxed">
             {t.createGroupDesc}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 pt-2">
+        <div className="space-y-4 pt-1">
+          {/* Group Title */}
           <div className="space-y-1.5">
-            <Label htmlFor="group-title">{t.groupTitle}</Label>
+            <Label htmlFor="group-title" className="text-xs font-medium">
+              {t.groupTitle}
+            </Label>
             <Input
               id="group-title"
               placeholder={t.groupTitlePlaceholder}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              className="h-9"
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label>{t.selectMembers(selectedIds.length)}</Label>
-            <div className="space-y-1.5 max-h-52 overflow-y-auto rounded-md border p-2">
-              {agents.map((agent) => {
-                const isSelected = selectedIds.includes(agent.id);
-                const isPrimary = agent.id === primaryAgentId;
-                return (
-                  <button
-                    key={agent.id}
-                    type="button"
-                    onClick={() => toggleAgent(agent.id)}
-                    onDoubleClick={() => setPrimaryAgentId(agent.id)}
-                    className={cn(
-                      'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-                      isSelected ? 'bg-muted' : 'opacity-50 hover:opacity-80',
-                    )}
-                  >
-                    <span
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs text-white"
-                      style={{ backgroundColor: agent.colour }}
-                    >
-                      {agent.avatar}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">
-                        {agent.name}
-                        {isPrimary && (
-                          <span className="ml-1.5 text-[10px] text-primary font-semibold">{t.primaryAgent}</span>
-                        )}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">{agent.role}</span>
-                    </span>
-                    <span
-                      className={cn(
-                        'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                        isSelected ? 'border-primary bg-primary text-primary-foreground' : 'border-border',
-                      )}
-                    >
-                      {isSelected && (
-                        <svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M2.5 6.5L5 9l4.5-5.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
+          {/* Members Selection */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs font-medium">
+                  {t.selectMembers(selectedIds.length)}
+                </Label>
+                <span className="text-[11px] text-muted-foreground">
+                  (已选 {selectedIds.length}/{agents.length})
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSelectAll}
+                  className="text-xs text-primary hover:underline font-medium inline-flex items-center gap-1"
+                >
+                  <CheckSquare className="h-3 w-3" />
+                  全选
+                </button>
+                <span className="text-muted-foreground/50 text-xs">|</span>
+                <button
+                  type="button"
+                  onClick={handleDeselectAll}
+                  className="text-xs text-muted-foreground hover:text-foreground hover:underline inline-flex items-center gap-1"
+                >
+                  <Square className="h-3 w-3" />
+                  清空
+                </button>
+              </div>
             </div>
-            <p className="text-[11px] text-muted-foreground">{t.clickToSelect}</p>
+
+            {/* Agent Grid: 2 columns on sm+ */}
+            <div className="max-h-56 overflow-y-auto rounded-lg border bg-muted/20 p-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {agents.map((agent) => {
+                  const isSelected = selectedIds.includes(agent.id);
+                  const isPrimary = agent.id === primaryAgentId;
+
+                  return (
+                    <div
+                      key={agent.id}
+                      onClick={() => toggleAgent(agent.id)}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        if (!isSelected) {
+                          toggleAgent(agent.id);
+                        }
+                        setPrimaryAgentId(agent.id);
+                      }}
+                      className={cn(
+                        'group flex items-center justify-between gap-2.5 rounded-lg border p-2 text-left cursor-pointer transition-all select-none',
+                        isSelected
+                          ? isPrimary
+                            ? 'border-primary/60 bg-primary/10 shadow-xs'
+                            : 'border-border bg-card hover:border-border/80 shadow-xs'
+                          : 'border-transparent bg-transparent opacity-50 hover:opacity-80 hover:bg-muted/40'
+                      )}
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-medium text-white shadow-xs"
+                          style={{ backgroundColor: agent.colour }}
+                        >
+                          {agent.avatar}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs font-semibold">{agent.name}</span>
+                            {isPrimary && (
+                              <Badge
+                                variant="default"
+                                className="text-[9px] px-1 py-0 h-3.5 leading-none shrink-0"
+                              >
+                                {t.primaryAgent}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="truncate text-[11px] text-muted-foreground">
+                            {agent.role}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center">
+                        <span
+                          className={cn(
+                            'flex h-4 w-4 items-center justify-center rounded border transition-colors',
+                            isSelected
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-muted-foreground/30 bg-background group-hover:border-muted-foreground/60'
+                          )}
+                        >
+                          {isSelected && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
+              <span>{t.clickToSelect}</span>
+              {needsPrimary && primaryAgent && (
+                <span className="font-medium text-foreground">
+                  当前主答：<span className="text-primary">{primaryAgent.name}</span>
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>{t.discussionMode}</Label>
-            <div className="grid grid-cols-2 gap-2">
+          {/* Discussion Mode Selection */}
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">{t.discussionMode}</Label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {/* Council Mode */}
               <button
                 type="button"
                 onClick={() => setMode('council')}
                 className={cn(
-                  'rounded-md border p-2.5 text-left transition-colors',
-                  mode === 'council' ? 'border-primary bg-primary/5' : 'hover:bg-muted',
+                  'rounded-lg border p-3 text-left transition-all flex flex-col justify-between gap-1.5',
+                  mode === 'council'
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary/20 shadow-xs'
+                    : 'border-border/70 bg-card hover:bg-muted/40'
                 )}
               >
-                <span className="block text-xs font-medium">{t.councilMode}</span>
-                <span className="block text-[11px] text-muted-foreground mt-0.5">{t.councilModeDesc}</span>
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold flex items-center gap-1.5">
+                    <MessageSquare className="h-3.5 w-3.5 text-primary" />
+                    {t.councilMode}
+                  </span>
+                  {mode === 'council' && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  {t.councilModeDesc}
+                </p>
               </button>
+
+              {/* Round Robin Mode */}
               <button
                 type="button"
                 onClick={() => setMode('round-robin')}
                 className={cn(
-                  'rounded-md border p-2.5 text-left transition-colors',
-                  mode === 'round-robin' ? 'border-primary bg-primary/5' : 'hover:bg-muted',
+                  'rounded-lg border p-3 text-left transition-all flex flex-col justify-between gap-1.5',
+                  mode === 'round-robin'
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary/20 shadow-xs'
+                    : 'border-border/70 bg-card hover:bg-muted/40'
                 )}
               >
-                <span className="block text-xs font-medium">{t.roundRobinMode}</span>
-                <span className="block text-[11px] text-muted-foreground mt-0.5">{t.roundRobinModeDesc}</span>
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold flex items-center gap-1.5">
+                    <RefreshCw className="h-3.5 w-3.5 text-primary" />
+                    {t.roundRobinMode}
+                  </span>
+                  {mode === 'round-robin' && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  {t.roundRobinModeDesc}
+                </p>
+              </button>
+
+              {/* Free Chat Mode */}
+              <button
+                type="button"
+                onClick={() => setMode('free-chat')}
+                className={cn(
+                  'rounded-lg border p-3 text-left transition-all flex flex-col justify-between gap-1.5',
+                  mode === 'free-chat'
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary/20 shadow-xs'
+                    : 'border-border/70 bg-card hover:bg-muted/40'
+                )}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    {t.freeChatMode}
+                  </span>
+                  {mode === 'free-chat' && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  {t.freeChatModeDesc}
+                </p>
               </button>
             </div>
           </div>
 
-          <Button onClick={handleCreate} disabled={!canCreate} className="w-full">
+          {/* Submit Button */}
+          <Button
+            onClick={handleCreate}
+            disabled={!canCreate}
+            className="w-full h-10 font-medium text-sm mt-2"
+          >
             {creating ? t.creating : t.create}
           </Button>
         </div>

@@ -85,6 +85,14 @@ export function ChatSettings({
             >
               {t.roundRobin}
             </Button>
+            <Button
+              size="sm"
+              variant={mode === 'free-chat' ? 'default' : 'ghost'}
+              className="h-7 text-xs px-2.5"
+              onClick={() => onModeChange('free-chat')}
+            >
+              {t.freeChat}
+            </Button>
           </div>
 
           <div className="h-5 w-px bg-border shrink-0 mt-1" />
@@ -171,6 +179,13 @@ export function ChatSettings({
                   <h4 className="font-medium">{t.roundRobin} Mode</h4>
                   <p className="text-muted-foreground">
                     {t.roundRobinHelp}
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <h4 className="font-medium">{t.freeChat}</h4>
+                  <p className="text-muted-foreground">
+                    {t.freeChatHelp}
                   </p>
                 </div>
 

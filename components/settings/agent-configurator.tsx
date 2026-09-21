@@ -153,7 +153,7 @@ export function AgentConfigurator({
           >
             {t.addAgent}
           </DialogTrigger>
-          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto p-6">
             <DialogHeader>
               <DialogTitle>{editingId ? (t.editAgent ?? '编辑 Agent') : t.addAgent}</DialogTitle>
             </DialogHeader>

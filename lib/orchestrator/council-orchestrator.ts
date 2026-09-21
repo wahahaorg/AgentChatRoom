@@ -6,10 +6,11 @@ import {
 } from 'ai';
 import { nanoid } from 'nanoid';
 import { createModelInstance, getThinkingParams } from '@/lib/providers/provider-factory';
-import { compressContextIfNeeded } from '@/lib/orchestrator/context-compressor';
+import { compressContextIfNeeded, estimateTokens } from '@/lib/orchestrator/context-compressor';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { CouncilConfig, OrchestrationConfig } from '@/lib/types/config';
 import type { SessionConfig, GateDecision } from '@/lib/types/council';
+import { consumePendingUserMessages } from '@/lib/orchestrator/pending-messages';
 
 interface OrchestratorContext {
   config: CouncilConfig;
@@ -34,6 +35,9 @@ function writeResponseMetadata(
 ): void {
   writer.write({
     type: 'start',
+    // Fresh id per wave: without this, the AI SDK client reuses the last
+    // assistant message's id and new interjections merge into old messages.
+    messageId: nanoid(),
     messageMetadata: {
       primaryAgent: {
         id: agent.id,
@@ -271,20 +275,19 @@ async function runGateCheck(
   ctx: OrchestratorContext,
   waitForRequestSlot: () => Promise<void>,
 ): Promise<GateDecision> {
+  const isGroupChat = primaryAgentName === 'GROUP_CHAT';
   const gatePrompt = `You are ${agent.name}, a ${agent.role}.
 
-You have been silently observing a conversation. The primary agent (${primaryAgentName}) just responded:
+${isGroupChat
+    ? `You are chatting in a group. The recent discussion and latest user message:\n\n---\n${primaryResponse}\n---`
+    : `You have been silently observing a conversation. The primary agent (${primaryAgentName}) just responded:\n\n---\n${primaryResponse}\n---`}
 
----
-${primaryResponse}
----
-
-Do you have a MEANINGFUL disagreement, important correction, critical additional perspective, or essential information that the primary agent missed?
+Do you want to speak now? Say YES if you have something meaningful to say — a disagreement, a correction, an answer to the user, or anything worth adding to the conversation.
 
 Rules:
-- Only say YES if you have something SUBSTANTIAL to add — not just rephrasing or minor elaboration.
-- If the primary agent's response is broadly correct and complete, say NO.
-- Prefer silence over noise.
+- Prefer silence over noise — if you have nothing substantial, say NO.
+- But this is a group chat: if the user asked a question or invited everyone to speak, say YES.
+- If the user is sharing their own experience or talking casually, respond like a friend in the group would — you do not need a formal reason to speak.
 
 Respond with exactly one word: YES or NO`;
 
@@ -299,7 +302,6 @@ Respond with exactly one word: YES or NO`;
       () => generateText({
         model,
         prompt: gatePrompt,
-        maxOutputTokens: 5,
       }),
     );
 
@@ -313,7 +315,8 @@ Respond with exactly one word: YES or NO`;
       decision,
       reason: result.text.trim(),
     };
-  } catch {
+  } catch (error) {
+    console.warn(`[council:gate-check-failed] agent="${agent.name}" error="${error instanceof Error ? error.message : error}"`);
     return {
       agentId: agent.id,
       agentName: agent.name,
@@ -661,6 +664,182 @@ export async function runRoundRobinMode(
     phase: 'done',
     pendingAgents: 0,
     totalAgents: Math.max(0, orderedAgents.length - 1),
+    message: 'Response complete.',
+  });
+}
+
+/**
+ * Free chat mode: no primary agent. After the user posts a message, ask
+ * members who wants to speak (gate check); whoever has something to say
+ * responds, their reply joins the context, and the loop repeats until no
+ * one wants to speak or the round limit is reached.
+ */
+export async function runFreeChatMode(
+  writer: UIMessageStreamWriter,
+  ctx: OrchestratorContext,
+): Promise<void> {
+  const { config, sessionConfig, orchestration, mentionedAgentIds } = ctx;
+  const waitForRequestSlot = createRequestPacer(orchestration);
+
+  const members = config.agents.filter((a) =>
+    sessionConfig.agentIds.includes(a.id),
+  );
+  if (members.length === 0) {
+    throw new Error('No agents configured');
+  }
+
+  // Compress long histories before any model calls
+  const compressed = await compressContextIfNeeded(
+    ctx.modelMessages,
+    members[0],
+    config,
+  );
+  ctx.modelMessages = compressed.messages;
+
+  // Snapshot of the first member for message metadata (no primary in this mode,
+  // but the frontend expects the metadata shape).
+  writeResponseMetadata(writer, members[0], sessionConfig.mode);
+
+  // Free-chat waves keep going until the accumulated discussion exceeds a
+  // token budget (instead of a fixed round count), so long interesting
+  // discussions are not cut off arbitrarily.
+  const FREE_CHAT_TOKEN_BUDGET = 6000;
+  // Safety cap: hard stop after this many rounds even if under budget.
+  const MAX_ROUNDS = 12;
+
+  // Transcripts accumulate each spoken turn so the next speaker sees them.
+  const transcript: ModelMessage[] = [];
+  const latestUserText = [...ctx.modelMessages]
+    .reverse()
+    .find((m) => m.role === 'user');
+  const latestUserContent = latestUserText && typeof latestUserText.content === 'string'
+    ? latestUserText.content
+    : '';
+  const speakersSoFar = new Set<string>();
+  let spokeThisTurn = 0;
+
+  const drainInjected = (): string[] => {
+    const injected = consumePendingUserMessages(sessionConfig.conversationId ?? '');
+    for (const text of injected) {
+      transcript.push({ role: 'user', content: text });
+      ctx.modelMessages.push({ role: 'user', content: text });
+    }
+    return injected;
+  };
+
+  const buildCheckContext = (highlightNewUserMessage: boolean): string => {
+    const recent = transcript
+      .slice(-10)
+      .map((m) => (m.role === 'user' ? `用户: ${m.content}` : String(m.content)))
+      .join('\n\n');
+    const lastUser = [...transcript].reverse().find((m) => m.role === 'user');
+    const lastUserContent = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
+    const tail = lastUserContent
+      ? `${recent}\n\n---\n\n最新消息: ${lastUserContent}`
+      : recent || latestUserContent;
+    return highlightNewUserMessage && lastUserContent
+      ? `最近讨论:\n\n${recent || '(还没有讨论)'}\n\n---\n\n用户刚发来新消息: ${lastUserContent}`
+      : tail;
+  };
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    // Stop the wave when the accumulated discussion exceeds the token budget.
+    if (estimateTokens(transcript) >= FREE_CHAT_TOKEN_BUDGET) break;
+
+    // Ask every member who has not spoken this round whether they want to speak.
+    const candidates = members.filter((a) => !speakersSoFar.has(a.id) || round > 0);
+    if (candidates.length === 0) break;
+
+    writeCouncilStatus(writer, {
+      phase: 'gate-check',
+      pendingAgents: candidates.length,
+      totalAgents: candidates.length,
+      message: `Checking who wants to speak (round ${round + 1})...`,
+    });
+
+    // One gate check at a time, with a human-paced pause between each —
+    // a user message injected during a pause gets picked up immediately.
+    const speakers: AgentConfig[] = [];
+    for (const agent of candidates) {
+      await new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 5000)));
+      const injected = drainInjected();
+      if (injected.length > 0) {
+        // A new user message just arrived: restart the round so every member
+        // re-checks against the freshest context including the new message.
+        round -= 1;
+        break;
+      }
+
+      const checkContext = buildCheckContext(false);
+      const decision = await runGateCheck(
+        agent,
+        'GROUP_CHAT',
+        checkContext,
+        ctx,
+        waitForRequestSlot,
+      );
+      if (decision.decision === 'yes') {
+        speakers.push(agent);
+
+        try {
+          await waitForRequestSlot();
+
+          const model = createModelInstance(agent, ctx.config);
+          const providerOptions = getThinkingParams(agent);
+
+          const result = await runWithRetryBackoff(
+            `free-chat response (${agent.name})`,
+            ctx.orchestration,
+            () => generateText({
+              model,
+              system: agent.systemPrompt,
+              messages: [
+                ...ctx.modelMessages,
+                ...transcript,
+                {
+                  role: 'user',
+                  content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation so far is above — the latest user message is what everyone is reacting to. Speak like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion.`,
+                },
+              ],
+              ...(Object.keys(providerOptions).length > 0
+                ? { providerOptions: providerOptions as never }
+                : {}),
+            }),
+          );
+
+          const text = stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents);
+          if (text) {
+            transcript.push({
+              role: 'assistant',
+              content: `${agent.name}（${agent.role}）: ${text}`,
+            });
+            speakersSoFar.add(agent.id);
+            spokeThisTurn += 1;
+            writeInterjection(writer, agent, text);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=free-chat error="${message}"`);
+          writeAgentError(writer, agent, message);
+        }
+      }
+    }
+
+    // Nobody managed to speak and no one wants to — end the loop.
+    if (spokeThisTurn === 0 && speakers.length === 0 && round > 0) break;
+  }
+
+  if (spokeThisTurn === 0) {
+    const id = nanoid();
+    writer.write({ type: 'text-start', id });
+    writer.write({ type: 'text-delta', id, delta: '（本次没有成员想发言）' });
+    writer.write({ type: 'text-end', id });
+  }
+
+  writeCouncilStatus(writer, {
+    phase: 'done',
+    pendingAgents: 0,
+    totalAgents: spokeThisTurn,
     message: 'Response complete.',
   });
 }

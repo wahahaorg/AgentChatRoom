@@ -1,4 +1,4 @@
-export type ConversationMode = 'council' | 'round-robin';
+export type ConversationMode = 'council' | 'round-robin' | 'free-chat';
 
 export interface GateDecision {
   agentId: string;
