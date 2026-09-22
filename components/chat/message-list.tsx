@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { MessageBubble, type ChatFileAttachment } from './message-bubble';
 import { InterjectionBlock } from './interjection-block';
 import { AgentErrorBlock } from './agent-error-block';
+import { StickerBlock } from './sticker-block';
 import { parseResponse } from '@/lib/orchestrator/parse-interjections';
 import { useI18n } from '@/lib/i18n';
 import type { UIMessage } from 'ai';
@@ -84,10 +85,12 @@ function findAgentForInterjection(
 }
 
 interface MessageSegment {
-  kind: 'primary' | 'interjection' | 'agent-error';
+  kind: 'primary' | 'interjection' | 'agent-error' | 'sticker' | 'reaction';
   text?: string;
   interjection?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; content: string };
   agentError?: { agentName: string; agentAvatar: string; agentColour?: string; error: string };
+  sticker?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; emoji: string };
+  reaction?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; emoji: string; target: string };
 }
 
 export function MessageList({
@@ -184,6 +187,10 @@ export function MessageList({
                 segments.push({ kind: 'interjection', interjection: part.data as MessageSegment['interjection'] });
               } else if (part.type === 'data-agent-error') {
                 segments.push({ kind: 'agent-error', agentError: part.data as NonNullable<MessageSegment['agentError']> });
+              } else if (part.type === 'data-sticker') {
+                segments.push({ kind: 'sticker', sticker: part.data as MessageSegment['sticker'] });
+              } else if (part.type === 'data-reaction') {
+                segments.push({ kind: 'reaction', reaction: part.data as MessageSegment['reaction'] });
               }
             }
 
@@ -222,6 +229,44 @@ export function MessageList({
                   />
                 )}
                 {segments.map((segment, i) => {
+                  if (segment.kind === 'sticker' && segment.sticker) {
+                    const sticker = segment.sticker;
+                    const stickerAgent = findAgentForInterjection(allAgents, sticker.agentName, sticker.agentRole);
+                    return (
+                      <StickerBlock
+                        key={`${message.id}-sticker-${i}`}
+                        agentName={sticker.agentName}
+                        agentRole={sticker.agentRole}
+                        agentAvatar={stickerAgent?.avatar ?? sticker.agentAvatar ?? 'AI'}
+                        agentColour={stickerAgent?.colour ?? sticker.agentColour}
+                        emoji={sticker.emoji}
+                      />
+                    );
+                  }
+
+                  if (segment.kind === 'reaction' && segment.reaction) {
+                    const reaction = segment.reaction;
+                    const reactionAgent = findAgentForInterjection(allAgents, reaction.agentName, reaction.agentRole);
+                    return (
+                      <div
+                        key={`${message.id}-reaction-${i}`}
+                        className="flex items-center gap-1.5 px-4 text-xs text-muted-foreground"
+                        title={`${reaction.agentName}: ${reaction.target}`}
+                      >
+                        <span
+                          className="flex h-4 w-4 items-center justify-center rounded-full text-[8px] text-white"
+                          style={{ backgroundColor: reactionAgent?.colour ?? reaction.agentColour ?? '#888' }}
+                        >
+                          {reactionAgent?.avatar ?? reaction.agentAvatar ?? 'AI'}
+                        </span>
+                        <span className="text-base leading-none">{reaction.emoji}</span>
+                        <span className="truncate max-w-[200px]">
+                          {reaction.agentName} 回应了“{reaction.target.length > 20 ? `${reaction.target.slice(0, 20)}…` : reaction.target}”
+                        </span>
+                      </div>
+                    );
+                  }
+
                   if (segment.kind === 'interjection' && segment.interjection) {
                     const interjection = segment.interjection;
                     const interjectionAgent = findAgentForInterjection(

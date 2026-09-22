@@ -1,9 +1,11 @@
 import {
   streamText,
   generateText,
+  tool,
   type ModelMessage,
   type UIMessageStreamWriter,
 } from 'ai';
+import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { createModelInstance, getThinkingParams } from '@/lib/providers/provider-factory';
 import { compressContextIfNeeded, estimateTokens } from '@/lib/orchestrator/context-compressor';
@@ -26,6 +28,80 @@ interface CouncilStatusData {
   pendingAgents: number;
   totalAgents: number;
   message: string;
+}
+
+const ALLOWED_REACTIONS = ['👍', '😂', '😭', '🤯', '👀', '🔥', '💔', '🎉', '😅', '🤔'];
+
+/** Tools agents can call to react with emoji or send a standalone sticker. */
+function createReactionTools(agentName: string) {
+  return {
+    react_to_message: tool({
+      description: 'React to a message in the group with an emoji (like WeChat message reactions). Use when you agree, find it funny, or want to acknowledge without a long reply.',
+      inputSchema: z.object({
+        emoji: z.enum(ALLOWED_REACTIONS as [string, ...string[]]).describe('The emoji to react with'),
+        target: z.string().describe('Short quote or description of the message you are reacting to'),
+      }),
+      execute: async () => ({ ok: true }),
+    }),
+    send_sticker: tool({
+      description: 'Send a standalone emoji sticker message (like sending a meme/表情包 in a group chat). Use when an emoji alone expresses your reaction better than words.',
+      inputSchema: z.object({
+        emoji: z.enum(ALLOWED_REACTIONS as [string, ...string[]]).describe('The emoji to send as a sticker'),
+      }),
+      execute: async () => ({ ok: true }),
+    }),
+  };
+}
+
+type ReactionCall = { kind: 'reaction'; emoji: string; target: string } | { kind: 'sticker'; emoji: string };
+
+function extractReactionCalls(result: { toolCalls: { toolName: string; input: unknown }[] }): ReactionCall[] {
+  const calls: ReactionCall[] = [];
+  for (const call of result.toolCalls) {
+    const input = call.input as { emoji?: string; target?: string };
+    if (typeof input?.emoji !== 'string') continue;
+    if (call.toolName === 'react_to_message' && typeof input.target === 'string') {
+      calls.push({ kind: 'reaction', emoji: input.emoji, target: input.target });
+    } else if (call.toolName === 'send_sticker') {
+      calls.push({ kind: 'sticker', emoji: input.emoji });
+    }
+  }
+  return calls;
+}
+
+function writeSticker(writer: UIMessageStreamWriter, agent: AgentConfig, emoji: string): void {
+  writer.write({
+    type: 'data-sticker',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      emoji,
+    },
+  });
+}
+
+/** A reaction on a specific message, emitted as its own data part. */
+function writeInterjectionReaction(
+  writer: UIMessageStreamWriter,
+  emoji: string,
+  agent: AgentConfig,
+  target: string,
+): void {
+  writer.write({
+    type: 'data-reaction',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      emoji,
+      target,
+    },
+  });
 }
 
 function writeResponseMetadata(
@@ -626,9 +702,10 @@ export async function runRoundRobinMode(
             ...priorResponses,
             {
               role: 'user',
-              content: `The previous agents have already responded. Now it is your turn as ${agent.name} (${agent.role}). Reply like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants, never include other agents' names as headers.`,
+              content: `The previous agents have already responded. Now it is your turn as ${agent.name} (${agent.role}). Reply like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants, never include other agents' names as headers. You can also use react_to_message to react with emoji to others' messages, or send_sticker for an emoji sticker.`,
             },
           ],
+          tools: createReactionTools(agent.name),
           ...(Object.keys(providerOptions).length > 0
             ? { providerOptions: providerOptions as never }
             : {}),
@@ -640,6 +717,15 @@ export async function runRoundRobinMode(
         content: `${agent.name}（${agent.role}）: ${result.text}`,
       });
       writeInterjection(writer, agent, result.text);
+
+      const roundRobinReactions = extractReactionCalls(result);
+      for (const call of roundRobinReactions) {
+        if (call.kind === 'sticker') {
+          writeSticker(writer, agent, call.emoji);
+        } else {
+          writeInterjectionReaction(writer, call.emoji, agent, call.target);
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=round-robin error="${message}"`);
@@ -798,9 +884,10 @@ export async function runFreeChatMode(
                 ...transcript,
                 {
                   role: 'user',
-                  content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation so far is above — the latest user message is what everyone is reacting to. Speak like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion.`,
+                  content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation so far is above — the latest user message is what everyone is reacting to. Speak like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion. You can also use the react_to_message tool to react with emoji to others' messages, or send_sticker to send an emoji sticker — use them naturally like real people do, but do not overuse them.`,
                 },
               ],
+              tools: createReactionTools(agent.name),
               ...(Object.keys(providerOptions).length > 0
                 ? { providerOptions: providerOptions as never }
                 : {}),
@@ -816,6 +903,18 @@ export async function runFreeChatMode(
             speakersSoFar.add(agent.id);
             spokeThisTurn += 1;
             writeInterjection(writer, agent, text);
+          }
+
+          // Emoji reactions and standalone stickers from tool calls.
+          const reactionCalls = extractReactionCalls(result);
+          for (const call of reactionCalls) {
+            if (call.kind === 'sticker') {
+              writeSticker(writer, agent, call.emoji);
+            } else {
+              // Attach as a reaction to the most recent assistant interjection
+              // in the stream (the frontend matches by data part order).
+              writeInterjectionReaction(writer, call.emoji, agent, call.target);
+            }
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
