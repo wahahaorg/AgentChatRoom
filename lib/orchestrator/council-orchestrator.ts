@@ -831,14 +831,6 @@ export async function runFreeChatMode(
     throw new Error('No agents configured');
   }
 
-  // Compress long histories before any model calls
-  const compressed = await compressContextIfNeeded(
-    ctx.modelMessages,
-    members[0],
-    config,
-  );
-  ctx.modelMessages = compressed.messages;
-
   // Snapshot of the first member for message metadata (no primary in this mode,
   // but the frontend expects the metadata shape).
   writeResponseMetadata(writer, members[0], sessionConfig.mode);
@@ -852,12 +844,6 @@ export async function runFreeChatMode(
 
   // Transcripts accumulate each spoken turn so the next speaker sees them.
   const transcript: ModelMessage[] = [];
-  const latestUserText = [...ctx.modelMessages]
-    .reverse()
-    .find((m) => m.role === 'user');
-  const latestUserContent = latestUserText && typeof latestUserText.content === 'string'
-    ? latestUserText.content
-    : '';
   const speakersSoFar = new Set<string>();
   let spokeThisTurn = 0;
 
@@ -870,21 +856,6 @@ export async function runFreeChatMode(
     return injected;
   };
 
-  const buildCheckContext = (highlightNewUserMessage: boolean): string => {
-    const recent = transcript
-      .slice(-10)
-      .map((m) => (m.role === 'user' ? `用户: ${m.content}` : String(m.content)))
-      .join('\n\n');
-    const lastUser = [...transcript].reverse().find((m) => m.role === 'user');
-    const lastUserContent = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
-    const tail = lastUserContent
-      ? `${recent}\n\n---\n\n最新消息: ${lastUserContent}`
-      : recent || latestUserContent;
-    return highlightNewUserMessage && lastUserContent
-      ? `最近讨论:\n\n${recent || '(还没有讨论)'}\n\n---\n\n用户刚发来新消息: ${lastUserContent}`
-      : tail;
-  };
-
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // Stop the wave when the accumulated discussion exceeds the token budget.
     if (estimateTokens(transcript) >= FREE_CHAT_TOKEN_BUDGET) break;
@@ -893,106 +864,94 @@ export async function runFreeChatMode(
     const candidates = members.filter((a) => !speakersSoFar.has(a.id) || round > 0);
     if (candidates.length === 0) break;
 
-    writeCouncilStatus(writer, {
-      phase: 'gate-check',
-      pendingAgents: candidates.length,
-      totalAgents: candidates.length,
-      message: `Checking who wants to speak (round ${round + 1})...`,
-    });
+    const userJustSpoke = drainInjected().length > 0;
+    if (!userJustSpoke && round > 0 && spokeThisTurn === 0) break;
 
-    // One gate check at a time, with a human-paced pause between each —
-    // a user message injected during a pause gets picked up immediately.
-    const speakers: AgentConfig[] = [];
+    // Single merged call per member: the model either speaks (normal reply)
+    // or replies [SILENT] to stay quiet — no separate gate-check step.
     for (const agent of candidates) {
-      await new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 5000)));
-      const injected = drainInjected();
-      if (injected.length > 0) {
-        // A new user message just arrived: restart the round so every member
-        // re-checks against the freshest context including the new message.
-        round -= 1;
-        break;
-      }
+      writeCouncilStatus(writer, {
+        phase: 'gate-check',
+        pendingAgents: candidates.length,
+        totalAgents: candidates.length,
+        message: `${agent.name} is deciding whether to speak (round ${round + 1})...`,
+      });
 
-      const checkContext = buildCheckContext(false);
-      const decision = await runGateCheck(
-        agent,
-        'GROUP_CHAT',
-        checkContext,
-        ctx,
-        waitForRequestSlot,
-      );
-      if (decision.decision === 'yes') {
-        speakers.push(agent);
+      try {
+        await waitForRequestSlot();
 
-        try {
-          await waitForRequestSlot();
+        const model = createModelInstance(agent, ctx.config);
+        const providerOptions = getThinkingParams(agent);
 
-          const model = createModelInstance(agent, ctx.config);
-          const providerOptions = getThinkingParams(agent);
+        // Like a real person in a group chat, each member only sees the
+        // recent conversation — no full history, no compression.
+        const recentContext = [
+          ...ctx.modelMessages,
+          ...transcript,
+        ].slice(-10);
 
-          const result = await runWithRetryBackoff(
-            `free-chat response (${agent.name})`,
-            ctx.orchestration,
-            () => generateText({
-              model,
-              system: agent.systemPrompt,
-              messages: [
-                ...ctx.modelMessages,
-                ...transcript,
-                {
-                  role: 'user',
-                  content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation so far is above — the latest user message is what everyone is reacting to. Speak like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion. You can also use the react_to_message tool to react with emoji to others' messages, or send_sticker to send an emoji sticker — use them naturally like real people do, but do not overuse them.`,
-                },
-              ],
-              tools: createReactionTools(agent.name, config.stickerSearch?.token),
-              toolChoice: 'auto',
-              ...(Object.keys(providerOptions).length > 0
-                ? { providerOptions: providerOptions as never }
-                : {}),
-            }),
-          );
+        const result = await runWithRetryBackoff(
+          `free-chat response (${agent.name})`,
+          ctx.orchestration,
+          () => generateText({
+            model,
+            system: agent.systemPrompt,
+            messages: [
+              ...recentContext,
+              {
+                role: 'user',
+                content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation above is what you can see — the latest user message is what everyone is reacting to. If you have something worth saying (a reaction, an answer, a disagreement, casual banter), speak now like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion. You can also use the react_to_message tool to react with emoji to others' messages, or send_sticker to send an emoji sticker — use them naturally like real people do, but do not overuse them. If you have nothing meaningful to add, reply with exactly [SILENT] and nothing else. Prefer silence over noise, but this is a casual group chat — the bar for speaking is low.`,
+              },
+            ],
+            tools: createReactionTools(agent.name, config.stickerSearch?.token),
+            toolChoice: 'auto',
+            ...(Object.keys(providerOptions).length > 0
+              ? { providerOptions: providerOptions as never }
+              : {}),
+          }),
+        );
 
-          const text = stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents);
-          if (text) {
-            transcript.push({
-              role: 'assistant',
-              content: `${agent.name}（${agent.role}）: ${text}`,
-            });
-            speakersSoFar.add(agent.id);
-            spokeThisTurn += 1;
-            writeInterjection(writer, agent, text);
-          }
-
-          // Emoji reactions and standalone stickers from tool calls.
-          const reactionCalls = extractReactionCalls(result);
-          for (const call of reactionCalls) {
-            if (call.kind === 'sticker') {
-              writeSticker(writer, agent, call.emoji);
-            } else if (call.kind === 'sticker-image') {
-              if (stickerToken) {
-                const imageUrl = await searchStickerImage(call.query, stickerToken);
-                if (imageUrl) {
-                  writeStickerImage(writer, agent, imageUrl, call.query);
-                } else {
-                  writeSticker(writer, agent, '🤣');
-                }
-              }
-            } else {
-              // Attach as a reaction to the most recent assistant interjection
-              // in the stream (the frontend matches by data part order).
-              writeInterjectionReaction(writer, call.emoji, agent, call.target);
-            }
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=free-chat error="${message}"`);
-          writeAgentError(writer, agent, message);
+        const text = stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents);
+        if (text && text.trim().toUpperCase().includes('[SILENT]')) {
+          // Member chose to stay quiet.
+          continue;
         }
+        if (text) {
+          transcript.push({
+            role: 'assistant',
+            content: `${agent.name}（${agent.role}）: ${text}`,
+          });
+          speakersSoFar.add(agent.id);
+          spokeThisTurn += 1;
+          writeInterjection(writer, agent, text);
+        }
+
+        // Emoji reactions and standalone stickers from tool calls.
+        const reactionCalls = extractReactionCalls(result);
+        for (const call of reactionCalls) {
+          if (call.kind === 'sticker') {
+            writeSticker(writer, agent, call.emoji);
+          } else if (call.kind === 'sticker-image') {
+            if (stickerToken) {
+              const imageUrl = await searchStickerImage(call.query, stickerToken);
+              if (imageUrl) {
+                writeStickerImage(writer, agent, imageUrl, call.query);
+              } else {
+                writeSticker(writer, agent, '🤣');
+              }
+            }
+          } else {
+            // Attach as a reaction to the most recent assistant interjection
+            // in the stream (the frontend matches by data part order).
+            writeInterjectionReaction(writer, call.emoji, agent, call.target);
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=free-chat error="${message}"`);
+        writeAgentError(writer, agent, message);
       }
     }
-
-    // Nobody managed to speak and no one wants to — end the loop.
-    if (spokeThisTurn === 0 && speakers.length === 0 && round > 0) break;
   }
 
   if (spokeThisTurn === 0) {
