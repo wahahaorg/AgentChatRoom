@@ -213,6 +213,25 @@ export function ChatContainer({
     setIsCouncilProcessing(true);
     setCouncilStatusMessage(t.generatingResponse);
 
+    // Persist the user message immediately so a refresh mid-stream doesn't
+    // lose it (saves only happen again after the stream ends otherwise).
+    if (activeConversationId.current) {
+      const userMessage: UIMessage = {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        parts: [
+          { type: 'text', text },
+          ...Array.from(files ?? []).map((file) => ({
+            type: 'file' as const,
+            url: URL.createObjectURL(file),
+            mediaType: file.type || 'application/octet-stream',
+            filename: file.name,
+          })),
+        ],
+      };
+      void saveMessages([...messages, userMessage]);
+    }
+
     // Send after a brief micro-delay to let the abort controller settle
     setTimeout(() => {
       sendMessage(
@@ -292,6 +311,11 @@ function hasPersistableContent(message: UIMessage): boolean {
 
     if (part.type === 'reasoning' || part.type === 'step-start') {
       return false;
+    }
+
+    if (part.type === 'data-interjection') {
+      const data = part.data as { content?: string } | undefined;
+      return Boolean(data?.content?.trim());
     }
 
     return true;

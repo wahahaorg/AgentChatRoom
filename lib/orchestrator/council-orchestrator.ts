@@ -503,6 +503,7 @@ function writeInterjection(
   agent: AgentConfig,
   content: string,
 ): void {
+  if (!content.trim()) return;
   writer.write({
     type: 'data-interjection',
     data: {
@@ -762,7 +763,7 @@ export async function runRoundRobinMode(
         role: 'assistant',
         content: `${agent.name}（${agent.role}）: ${result.text}`,
       });
-      writeInterjection(writer, agent, result.text);
+      writeInterjection(writer, agent, stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents));
 
       const roundRobinReactions = extractReactionCalls(result);
       for (const call of roundRobinReactions) {

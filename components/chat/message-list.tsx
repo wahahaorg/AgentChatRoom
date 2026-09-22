@@ -269,7 +269,7 @@ export function MessageList({
                     );
                   }
 
-                  if (segment.kind === 'interjection' && segment.interjection) {
+                  if (segment.kind === 'interjection' && segment.interjection && segment.interjection.content?.trim()) {
                     const interjection = segment.interjection;
                     const interjectionAgent = findAgentForInterjection(
                       allAgents,

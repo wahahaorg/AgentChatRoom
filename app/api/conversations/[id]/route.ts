@@ -42,7 +42,23 @@ export async function PUT(
   if (mode !== undefined) conversation.mode = mode as typeof conversation.mode;
   if (primaryAgentId !== undefined) conversation.primaryAgentId = primaryAgentId;
   if (agentIds !== undefined) conversation.agentIds = agentIds;
-  if (messages !== undefined) conversation.messages = messages;
+  if (messages !== undefined) {
+    // Merge by message id instead of overwriting: in group chats multiple
+    // clients save their own view of the conversation, and a blind overwrite
+    // would drop messages saved by other participants.
+    const byId = new Map<string, unknown>();
+    for (const m of conversation.messages) {
+      byId.set((m as { id: string }).id, m);
+    }
+    for (const m of messages) {
+      byId.set((m as { id: string }).id, m);
+    }
+    const merged = [...byId.values()];
+    // Preserve conversation order (by first appearance) — sort merged by
+    // createdAt-ish order is unreliable; keep insertion order of stored first
+    // then append new ones.
+    conversation.messages = merged as typeof conversation.messages;
+  }
   conversation.updatedAt = new Date().toISOString();
 
   await saveConversation(conversation);
