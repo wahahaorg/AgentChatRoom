@@ -89,7 +89,7 @@ interface MessageSegment {
   text?: string;
   interjection?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; content: string };
   agentError?: { agentName: string; agentAvatar: string; agentColour?: string; error: string };
-  sticker?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; emoji: string };
+  sticker?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; emoji?: string; imageUrl?: string; query?: string };
   reaction?: { agentName: string; agentRole: string; agentAvatar?: string; agentColour?: string; emoji: string; target: string };
 }
 
@@ -240,6 +240,8 @@ export function MessageList({
                         agentAvatar={stickerAgent?.avatar ?? sticker.agentAvatar ?? 'AI'}
                         agentColour={stickerAgent?.colour ?? sticker.agentColour}
                         emoji={sticker.emoji}
+                        imageUrl={sticker.imageUrl}
+                        query={sticker.query}
                       />
                     );
                   }

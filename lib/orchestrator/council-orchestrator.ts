@@ -33,7 +33,7 @@ interface CouncilStatusData {
 const ALLOWED_REACTIONS = ['👍', '😂', '😭', '🤯', '👀', '🔥', '💔', '🎉', '😅', '🤔'];
 
 /** Tools agents can call to react with emoji or send a standalone sticker. */
-function createReactionTools(agentName: string) {
+function createReactionTools(agentName: string, stickerToken: string | undefined) {
   return {
     react_to_message: tool({
       description: 'React to a message in the group with an emoji (like WeChat message reactions). Use when you agree, find it funny, or want to acknowledge without a long reply.',
@@ -50,23 +50,52 @@ function createReactionTools(agentName: string) {
       }),
       execute: async () => ({ ok: true }),
     }),
+    ...(stickerToken
+      ? {
+          send_sticker_image: tool({
+            description: 'Send a Chinese meme sticker image (表情包/斗图, e.g. 熊猫头, 金馆长). Search with precise Chinese keywords describing the meme you want (e.g. "熊猫头无语", "金馆长大笑") and a random matching image is sent.',
+            inputSchema: z.object({
+              query: z.string().describe('Precise Chinese keywords for the meme to search, e.g. 熊猫头摇头, 金馆长大笑, 蘑菇头无语'),
+            }),
+            execute: async () => ({ ok: true }),
+          }),
+        }
+      : {}),
   };
 }
 
-type ReactionCall = { kind: 'reaction'; emoji: string; target: string } | { kind: 'sticker'; emoji: string };
+type ReactionCall = { kind: 'reaction'; emoji: string; target: string } | { kind: 'sticker'; emoji: string } | { kind: 'sticker-image'; query: string };
 
-function extractReactionCalls(result: { toolCalls: { toolName: string; input: unknown }[] }): ReactionCall[] {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractReactionCalls(result: { toolCalls: readonly any[] }): ReactionCall[] {
   const calls: ReactionCall[] = [];
   for (const call of result.toolCalls) {
-    const input = call.input as { emoji?: string; target?: string };
+    const input = call.input as { emoji?: string; target?: string; query?: string };
     if (typeof input?.emoji !== 'string') continue;
     if (call.toolName === 'react_to_message' && typeof input.target === 'string') {
       calls.push({ kind: 'reaction', emoji: input.emoji, target: input.target });
     } else if (call.toolName === 'send_sticker') {
       calls.push({ kind: 'sticker', emoji: input.emoji });
+    } else if (call.toolName === 'send_sticker_image' && typeof input.query === 'string') {
+      calls.push({ kind: 'sticker-image', query: input.query });
     }
   }
   return calls;
+}
+
+/** Search a Chinese meme sticker image by keywords; returns null on failure. */
+async function searchStickerImage(query: string, stickerToken: string): Promise<string | null> {
+  try {
+    const url = `https://v3.alapi.cn/api/doutu?token=${encodeURIComponent(stickerToken)}&keyword=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = await res.json() as { success?: boolean; data?: string[] };
+    const images = Array.isArray(json?.data) ? json.data.filter((u) => typeof u === 'string') : [];
+    if (images.length === 0) return null;
+    return images[Math.floor(Math.random() * images.length)];
+  } catch {
+    return null;
+  }
 }
 
 function writeSticker(writer: UIMessageStreamWriter, agent: AgentConfig, emoji: string): void {
@@ -79,6 +108,21 @@ function writeSticker(writer: UIMessageStreamWriter, agent: AgentConfig, emoji: 
       agentAvatar: agent.avatar,
       agentColour: agent.colour,
       emoji,
+    },
+  });
+}
+
+function writeStickerImage(writer: UIMessageStreamWriter, agent: AgentConfig, imageUrl: string, query: string): void {
+  writer.write({
+    type: 'data-sticker',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      imageUrl,
+      query,
     },
   });
 }
@@ -643,6 +687,7 @@ export async function runRoundRobinMode(
   ctx: OrchestratorContext,
 ): Promise<void> {
   const { config, sessionConfig, orchestration, mentionedAgentIds } = ctx;
+  const stickerToken = config.stickerSearch?.token;
   const waitForRequestSlot = createRequestPacer(orchestration);
 
   const activeAgents = config.agents.filter((a) =>
@@ -705,7 +750,8 @@ export async function runRoundRobinMode(
               content: `The previous agents have already responded. Now it is your turn as ${agent.name} (${agent.role}). Reply like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants, never include other agents' names as headers. You can also use react_to_message to react with emoji to others' messages, or send_sticker for an emoji sticker.`,
             },
           ],
-          tools: createReactionTools(agent.name),
+          tools: createReactionTools(agent.name, config.stickerSearch?.token),
+          toolChoice: 'auto',
           ...(Object.keys(providerOptions).length > 0
             ? { providerOptions: providerOptions as never }
             : {}),
@@ -722,6 +768,15 @@ export async function runRoundRobinMode(
       for (const call of roundRobinReactions) {
         if (call.kind === 'sticker') {
           writeSticker(writer, agent, call.emoji);
+        } else if (call.kind === 'sticker-image') {
+          if (stickerToken) {
+            const imageUrl = await searchStickerImage(call.query, stickerToken);
+            if (imageUrl) {
+              writeStickerImage(writer, agent, imageUrl, call.query);
+            } else {
+              writeSticker(writer, agent, '🤣');
+            }
+          }
         } else {
           writeInterjectionReaction(writer, call.emoji, agent, call.target);
         }
@@ -765,6 +820,7 @@ export async function runFreeChatMode(
   ctx: OrchestratorContext,
 ): Promise<void> {
   const { config, sessionConfig, orchestration, mentionedAgentIds } = ctx;
+  const stickerToken = config.stickerSearch?.token;
   const waitForRequestSlot = createRequestPacer(orchestration);
 
   const members = config.agents.filter((a) =>
@@ -887,7 +943,8 @@ export async function runFreeChatMode(
                   content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation so far is above — the latest user message is what everyone is reacting to. Speak like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion. You can also use the react_to_message tool to react with emoji to others' messages, or send_sticker to send an emoji sticker — use them naturally like real people do, but do not overuse them.`,
                 },
               ],
-              tools: createReactionTools(agent.name),
+              tools: createReactionTools(agent.name, config.stickerSearch?.token),
+              toolChoice: 'auto',
               ...(Object.keys(providerOptions).length > 0
                 ? { providerOptions: providerOptions as never }
                 : {}),
@@ -910,6 +967,15 @@ export async function runFreeChatMode(
           for (const call of reactionCalls) {
             if (call.kind === 'sticker') {
               writeSticker(writer, agent, call.emoji);
+            } else if (call.kind === 'sticker-image') {
+              if (stickerToken) {
+                const imageUrl = await searchStickerImage(call.query, stickerToken);
+                if (imageUrl) {
+                  writeStickerImage(writer, agent, imageUrl, call.query);
+                } else {
+                  writeSticker(writer, agent, '🤣');
+                }
+              }
             } else {
               // Attach as a reaction to the most recent assistant interjection
               // in the stream (the frontend matches by data part order).

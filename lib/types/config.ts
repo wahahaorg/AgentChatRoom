@@ -19,6 +19,11 @@ export interface OrchestrationConfig {
   requestSpacingMs: number;
 }
 
+export interface StickerSearchConfig {
+  provider: string;
+  token: string;
+}
+
 export interface CouncilConfig {
   apiKeys: Partial<Record<string, string>>;
   customProviders: CustomProviderConfig[];
@@ -26,6 +31,7 @@ export interface CouncilConfig {
   defaultMode: import('./council').ConversationMode;
   defaultPrimaryAgentId: string | null;
   orchestration: OrchestrationConfig;
+  stickerSearch?: StickerSearchConfig;
 }
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
