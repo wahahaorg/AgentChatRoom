@@ -13,6 +13,12 @@ import type { AgentConfig } from '@/lib/types/agents';
 import type { CouncilConfig, OrchestrationConfig } from '@/lib/types/config';
 import type { SessionConfig, GateDecision } from '@/lib/types/council';
 import { consumePendingUserMessages } from '@/lib/orchestrator/pending-messages';
+import {
+  startLiveWave,
+  appendLivePart,
+  flushLiveWave,
+  endLiveWave,
+} from '@/lib/orchestrator/live-persistence';
 
 interface OrchestratorContext {
   config: CouncilConfig;
@@ -21,6 +27,18 @@ interface OrchestratorContext {
   orchestration: OrchestrationConfig;
   /** Agent IDs @-mentioned in the latest user message. */
   mentionedAgentIds: string[];
+}
+
+/** Emit a part to the stream and persist it server-side for all viewers. */
+function writeAndPersist(
+  writer: UIMessageStreamWriter,
+  ctx: OrchestratorContext,
+  part: Record<string, unknown>,
+): void {
+  writer.write(part as never);
+  if (ctx.sessionConfig.conversationId) {
+    appendLivePart(ctx.sessionConfig.conversationId, part);
+  }
 }
 
 interface CouncilStatusData {
@@ -144,6 +162,84 @@ function writeInterjectionReaction(
       agentColour: agent.colour,
       emoji,
       target,
+    },
+  });
+}
+
+/* Server-side persistence counterparts — build the same data parts as the
+ * write* functions and store them in the conversation file. */
+function persistInterjection(ctx: OrchestratorContext, agent: AgentConfig, content: string): void {
+  if (!content.trim() || !ctx.sessionConfig.conversationId) return;
+  appendLivePart(ctx.sessionConfig.conversationId, {
+    type: 'data-interjection',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      content,
+    },
+  });
+}
+
+function persistSticker(ctx: OrchestratorContext, agent: AgentConfig, emoji: string): void {
+  if (!ctx.sessionConfig.conversationId) return;
+  appendLivePart(ctx.sessionConfig.conversationId, {
+    type: 'data-sticker',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      emoji,
+    },
+  });
+}
+
+function persistStickerImage(ctx: OrchestratorContext, agent: AgentConfig, imageUrl: string, query: string): void {
+  if (!ctx.sessionConfig.conversationId) return;
+  appendLivePart(ctx.sessionConfig.conversationId, {
+    type: 'data-sticker',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      imageUrl,
+      query,
+    },
+  });
+}
+
+function persistReaction(ctx: OrchestratorContext, emoji: string, agent: AgentConfig, target: string): void {
+  if (!ctx.sessionConfig.conversationId) return;
+  appendLivePart(ctx.sessionConfig.conversationId, {
+    type: 'data-reaction',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      emoji,
+      target,
+    },
+  });
+}
+
+function persistAgentError(ctx: OrchestratorContext, agent: AgentConfig, error: string): void {
+  if (!ctx.sessionConfig.conversationId) return;
+  appendLivePart(ctx.sessionConfig.conversationId, {
+    type: 'data-agent-error',
+    data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentAvatar: agent.avatar,
+      agentColour: agent.colour,
+      error,
     },
   });
 }
@@ -831,6 +927,12 @@ export async function runFreeChatMode(
     throw new Error('No agents configured');
   }
 
+  // Server-side live persistence: keep the conversation file in sync as the
+  // wave streams, so all viewers (and refreshes) see the same messages.
+  if (sessionConfig.conversationId) {
+    await startLiveWave(sessionConfig.conversationId, sessionConfig);
+  }
+
   // Snapshot of the first member for message metadata (no primary in this mode,
   // but the frontend expects the metadata shape).
   writeResponseMetadata(writer, members[0], sessionConfig.mode);
@@ -924,6 +1026,7 @@ export async function runFreeChatMode(
           speakersSoFar.add(agent.id);
           spokeThisTurn += 1;
           writeInterjection(writer, agent, text);
+          persistInterjection(ctx, agent, text);
         }
 
         // Emoji reactions and standalone stickers from tool calls.
@@ -931,25 +1034,30 @@ export async function runFreeChatMode(
         for (const call of reactionCalls) {
           if (call.kind === 'sticker') {
             writeSticker(writer, agent, call.emoji);
+            persistSticker(ctx, agent, call.emoji);
           } else if (call.kind === 'sticker-image') {
             if (stickerToken) {
               const imageUrl = await searchStickerImage(call.query, stickerToken);
               if (imageUrl) {
                 writeStickerImage(writer, agent, imageUrl, call.query);
+                persistStickerImage(ctx, agent, imageUrl, call.query);
               } else {
                 writeSticker(writer, agent, '🤣');
+                persistSticker(ctx, agent, '🤣');
               }
             }
           } else {
             // Attach as a reaction to the most recent assistant interjection
             // in the stream (the frontend matches by data part order).
             writeInterjectionReaction(writer, call.emoji, agent, call.target);
+            persistReaction(ctx, call.emoji, agent, call.target);
           }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=free-chat error="${message}"`);
         writeAgentError(writer, agent, message);
+        persistAgentError(ctx, agent, message);
       }
     }
   }
@@ -967,4 +1075,9 @@ export async function runFreeChatMode(
     totalAgents: spokeThisTurn,
     message: 'Response complete.',
   });
+
+  if (sessionConfig.conversationId) {
+    await flushLiveWave(sessionConfig.conversationId);
+    endLiveWave(sessionConfig.conversationId);
+  }
 }

@@ -15,17 +15,20 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { SCENE_TEMPLATES } from '@/lib/agents/presets';
 import type { AgentConfig } from '@/lib/types/agents';
+import type { Scene } from '@/lib/types/scene';
 import type { ConversationMode } from '@/lib/types/council';
-import { Users, Check, MessageSquare, RefreshCw, Sparkles, CheckSquare, Square } from 'lucide-react';
+import { Users, Check, MessageSquare, RefreshCw, Sparkles, CheckSquare, Square, Wand2 } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
 interface CreateGroupDialogProps {
   agents: AgentConfig[];
+  scenes?: Scene[];
   defaultMode?: ConversationMode;
 }
 
-export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGroupDialogProps) {
+export function CreateGroupDialog({ agents, scenes = [], defaultMode = 'council' }: CreateGroupDialogProps) {
   const router = useRouter();
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
@@ -34,6 +37,7 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
   const [mode, setMode] = useState<ConversationMode>(defaultMode);
   const [primaryAgentId, setPrimaryAgentId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [applyingScene, setApplyingScene] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -72,8 +76,71 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
     setPrimaryAgentId(null);
   };
 
+  const handleApplyScene = async (sceneId: string) => {
+    const scene = SCENE_TEMPLATES.find((s) => s.id === sceneId);
+    if (!scene || applyingScene) return;
+    setApplyingScene(true);
+    try {
+      // Create any scene members that don't exist yet (matched by name).
+      const existing = await (await fetch('/api/config')).json();
+      const existingNames = new Set((existing.agents ?? []).map((a: AgentConfig) => a.name));
+      const toCreate = scene.members.filter((m) => !existingNames.has(m.name));
+      let createdAgents: AgentConfig[] = [];
+      if (toCreate.length > 0) {
+        const res = await fetch('/api/agents/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agents: toCreate.map((m) => ({ ...m, scene: scene.name })) }),
+        });
+        if (!res.ok) throw new Error('Failed to create scene agents');
+        const data = await res.json();
+        createdAgents = data.agents ?? [];
+      }
+      const allAgents: AgentConfig[] = [...(existing.agents ?? []), ...createdAgents];
+      const sceneIds = scene.members
+        .map((m) => allAgents.find((a: AgentConfig) => a.name === m.name)?.id)
+        .filter((id): id is string => Boolean(id));
+
+      setSelectedIds(sceneIds);
+      setMode(scene.mode);
+      setTitle(scene.name);
+      setPrimaryAgentId(scene.mode === 'free-chat' ? (sceneIds[0] ?? null) : (sceneIds[0] ?? null));
+    } catch {
+      // Keep dialog state on failure
+    } finally {
+      setApplyingScene(false);
+    }
+  };
+
+  const handleApplySavedScene = (scene: Scene) => {
+    const ids = scene.agentIds.filter((id) => agents.some((a) => a.id === id));
+    if (ids.length === 0) return;
+    setSelectedIds(ids);
+    setMode(scene.mode);
+    setTitle(scene.name);
+    setPrimaryAgentId(ids[0] ?? null);
+  };
+
   const needsPrimary = mode !== 'free-chat';
   const canCreate = selectedIds.length > 0 && (!needsPrimary || primaryAgentId) && !creating;
+
+  // Group members by scene tag: named scene sections first, then ungrouped.
+  const agentSections = (() => {
+    const sceneNames: string[] = [];
+    const byScene = new Map<string, AgentConfig[]>();
+    for (const agent of agents) {
+      const key = agent.scene ?? '';
+      if (!byScene.has(key)) {
+        byScene.set(key, []);
+        if (agent.scene) sceneNames.push(agent.scene);
+      }
+      byScene.get(key)!.push(agent);
+    }
+    return [
+      ...sceneNames.map((name) => ({ label: name, items: byScene.get(name)! })),
+      { label: null, items: byScene.get('') ?? [] },
+    ].filter((s) => s.items.length > 0);
+  })();
 
   const handleCreate = async () => {
     if (!canCreate) return;
@@ -135,6 +202,57 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
         </DialogHeader>
 
         <div className="space-y-4 pt-1">
+          {/* Saved scenes: one-click member + mode preset */}
+          {scenes.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                我的场景
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {scenes.map((scene) => (
+                  <button
+                    key={scene.id}
+                    type="button"
+                    onClick={() => handleApplySavedScene(scene)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                      'border-primary/40 bg-primary/5 hover:bg-primary/10',
+                    )}
+                  >
+                    <span>{scene.emoji ?? '🎭'}</span>
+                    {scene.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Scene templates: one-click cast + mode + title */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium flex items-center gap-1.5">
+              <Wand2 className="h-3.5 w-3.5 text-primary" />
+              场景模板（一键配好成员和模式）
+            </Label>
+            <div className="flex flex-wrap gap-2">
+              {SCENE_TEMPLATES.map((scene) => (
+                <button
+                  key={scene.id}
+                  type="button"
+                  disabled={applyingScene}
+                  onClick={() => handleApplyScene(scene.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                    'border-border/70 bg-card hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50',
+                  )}
+                >
+                  <span>{scene.emoji}</span>
+                  {scene.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Group Title */}
           <div className="space-y-1.5">
             <Label htmlFor="group-title" className="text-xs font-medium">
@@ -181,10 +299,17 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
               </div>
             </div>
 
-            {/* Agent Grid: 2 columns on sm+ */}
+            {/* Agent Grid: grouped by scene, 2 columns on sm+ */}
             <div className="max-h-56 overflow-y-auto rounded-lg border bg-muted/20 p-2.5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {agents.map((agent) => {
+              {agentSections.map((section, si) => (
+                  <div key={section.label ?? 'default'} className={cn(si > 0 && 'mt-3 pt-3 border-t border-border/50')}>
+                    {section.label && (
+                      <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5 px-1">
+                        {section.label}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {section.items.map((agent) => {
                   const isSelected = selectedIds.includes(agent.id);
                   const isPrimary = agent.id === primaryAgentId;
 
@@ -248,7 +373,9 @@ export function CreateGroupDialog({ agents, defaultMode = 'council' }: CreateGro
                     </div>
                   );
                 })}
-              </div>
+                    </div>
+                  </div>
+              ))}
             </div>
             <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
               <span>{t.clickToSelect}</span>

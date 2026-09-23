@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import type { ConversationSummary } from '@/lib/types/council';
 import type { AgentConfig } from '@/lib/types/agents';
+import type { Scene } from '@/lib/types/scene';
 import type { ConversationMode } from '@/lib/types/council';
 
 interface SidebarProps {
@@ -28,6 +29,7 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
   const pathname = usePathname();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [scenes, setScenes] = useState<Scene[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
@@ -55,7 +57,10 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
   useEffect(() => {
     fetch('/api/config')
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setAgents(data?.agents ?? []))
+      .then((data) => {
+        setAgents(data?.agents ?? []);
+        setScenes(data?.scenes ?? []);
+      })
       .catch(() => {});
   }, []);
 
@@ -211,7 +216,7 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
         </Button>
         {!isCollapsed && (
           <div className="mt-2">
-            <CreateGroupDialog agents={agents} defaultMode={defaultMode} />
+            <CreateGroupDialog agents={agents} scenes={scenes} defaultMode={defaultMode} />
           </div>
         )}
       </div>

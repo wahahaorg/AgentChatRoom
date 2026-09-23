@@ -14,6 +14,8 @@ export interface AgentConfig {
   modelId: string;
   colour: string;
   avatar: string;
+  /** Optional scene tag — agents with the same scene are grouped together in UI. */
+  scene?: string;
   thinking?: ThinkingConfig;
 }
 

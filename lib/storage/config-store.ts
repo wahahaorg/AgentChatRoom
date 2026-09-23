@@ -28,6 +28,7 @@ export async function readConfig(): Promise<CouncilConfig> {
       },
       customProviders: parsed.customProviders ?? DEFAULT_CONFIG.customProviders ?? [],
       agents: parsed.agents ?? DEFAULT_CONFIG.agents,
+      scenes: parsed.scenes ?? DEFAULT_CONFIG.scenes,
       orchestration: {
         ...DEFAULT_CONFIG.orchestration,
         ...(parsed.orchestration ?? {}),

@@ -6,6 +6,7 @@ import {
   type UIMessageStreamWriter,
 } from 'ai';
 import { readConfig } from '@/lib/storage/config-store';
+import { getConversation, saveConversation } from '@/lib/storage/conversation-store';
 import { runCouncilMode, runRoundRobinMode, runFreeChatMode } from '@/lib/orchestrator/council-orchestrator';
 import type { SessionConfig } from '@/lib/types/council';
 
@@ -100,6 +101,23 @@ export async function POST(request: Request) {
   const sanitizedMessages = sanitizeIncomingMessages(messages ?? []);
   const modelMessages = await convertToModelMessages(sanitizedMessages);
   const config = await readConfig();
+
+  // Persist the latest user message server-side (single AI SDK id, deduped)
+  // so refreshes and other viewers of the conversation see it.
+  const lastUserMessage = [...sanitizedMessages].reverse().find((m) => m.role === 'user');
+  if (conversationId && lastUserMessage) {
+    const conv = await getConversation(conversationId);
+    if (conv) {
+      const alreadyStored = (conv.messages ?? []).some(
+        (m) => (m as { id?: string }).id === lastUserMessage.id,
+      );
+      if (!alreadyStored) {
+        conv.messages.push(lastUserMessage);
+        conv.updatedAt = new Date().toISOString();
+        await saveConversation(conv);
+      }
+    }
+  }
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {

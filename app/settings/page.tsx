@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ApiKeyManager } from '@/components/settings/api-key-manager';
 import { CustomProviderManager } from '@/components/settings/custom-provider-manager';
 import { AgentConfigurator } from '@/components/settings/agent-configurator';
+import { SceneManager } from '@/components/settings/scene-manager';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
@@ -17,6 +18,7 @@ export default function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<Partial<Record<ProviderId, string>>>({});
   const [customProviders, setCustomProviders] = useState<CouncilConfig['customProviders']>([]);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [scenes, setScenes] = useState<CouncilConfig['scenes']>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchConfig = useCallback(async () => {
@@ -26,6 +28,7 @@ export default function SettingsPage() {
       setApiKeys(data.apiKeys ?? {});
       setCustomProviders(data.customProviders ?? []);
       setAgents(data.agents ?? []);
+      setScenes(data.scenes ?? []);
     } catch {
       toast.error(t.loadFailed);
     } finally {
@@ -173,6 +176,29 @@ export default function SettingsPage() {
               onSaveProvider={handleSaveProvider}
               onRemoveProvider={handleRemoveProvider}
               onTestProvider={handleTestProvider}
+            />
+          </section>
+
+          <Separator />
+
+          <section>
+            <SceneManager
+              scenes={scenes}
+              agents={agents}
+              onSave={async (nextScenes) => {
+                try {
+                  const res = await fetch('/api/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scenes: nextScenes }),
+                  });
+                  if (!res.ok) throw new Error('Failed to save scenes');
+                  toast.success('场景已保存');
+                  await fetchConfig();
+                } catch {
+                  toast.error('保存场景失败');
+                }
+              }}
             />
           </section>
 

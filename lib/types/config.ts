@@ -28,6 +28,7 @@ export interface CouncilConfig {
   apiKeys: Partial<Record<string, string>>;
   customProviders: CustomProviderConfig[];
   agents: import('./agents').AgentConfig[];
+  scenes: import('./scene').Scene[];
   defaultMode: import('./council').ConversationMode;
   defaultPrimaryAgentId: string | null;
   orchestration: OrchestrationConfig;
@@ -49,6 +50,7 @@ export const DEFAULT_CONFIG: CouncilConfig = {
   apiKeys: {},
   customProviders: [],
   agents: [],
+  scenes: [],
   defaultMode: 'council',
   defaultPrimaryAgentId: null,
   orchestration: DEFAULT_ORCHESTRATION_CONFIG,

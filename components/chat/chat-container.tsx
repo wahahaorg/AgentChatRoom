@@ -84,6 +84,32 @@ export function ChatContainer({
 
   const isStreaming = status === 'streaming' || status === 'submitted' || isCouncilProcessing;
 
+  // Poll the server for new messages so all viewers of the conversation stay
+  // in sync (another viewer's messages and live agent output land here too).
+  // Skipped while this client is streaming to avoid clobbering local state.
+  useEffect(() => {
+    if (!activeConversationId.current || !conversationId) return;
+    const interval = setInterval(async () => {
+      if (status === 'streaming' || status === 'submitted' || isCouncilProcessing) return;
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}`);
+        if (!res.ok) return;
+        const conv = await res.json();
+        const serverMessages = (conv.messages ?? []) as UIMessage[];
+        if (serverMessages.length === 0) return;
+        setMessages((prev) => {
+          const localIds = new Set(prev.map((m) => m.id));
+          const missing = serverMessages.filter((m) => !localIds.has(m.id));
+          if (missing.length === 0) return prev;
+          return [...prev, ...missing];
+        });
+      } catch {
+        // Ignore polling errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [conversationId, status, isCouncilProcessing, setMessages]);
+
   // Free-chat mode: messages sent while the group is still discussing are
   // queued and automatically sent as the next round when the current wave ends.
   const pendingSendRef = useRef<{ text: string; files?: FileList; mentionedAgentIds?: string[] } | null>(null);
@@ -213,26 +239,9 @@ export function ChatContainer({
     setIsCouncilProcessing(true);
     setCouncilStatusMessage(t.generatingResponse);
 
-    // Persist the user message immediately so a refresh mid-stream doesn't
-    // lose it (saves only happen again after the stream ends otherwise).
-    if (activeConversationId.current) {
-      const userMessage: UIMessage = {
-        id: `user-${Date.now()}`,
-        role: 'user',
-        parts: [
-          { type: 'text', text },
-          ...Array.from(files ?? []).map((file) => ({
-            type: 'file' as const,
-            url: URL.createObjectURL(file),
-            mediaType: file.type || 'application/octet-stream',
-            filename: file.name,
-          })),
-        ],
-      };
-      void saveMessages([...messages, userMessage]);
-    }
-
-    // Send after a brief micro-delay to let the abort controller settle
+    // The user message is persisted server-side by the chat route (single
+    // AI SDK id, no duplicate). Send after a brief micro-delay to let the
+    // abort controller settle.
     setTimeout(() => {
       sendMessage(
         { text, ...(files && files.length > 0 ? { files } : {}) },

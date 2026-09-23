@@ -22,6 +22,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     const saved = window.localStorage.getItem('council.locale');
     if (saved === 'zh' || saved === 'en') {
       setLocaleState(saved);
+    } else if (navigator.language.toLowerCase().startsWith('zh')) {
+      // No saved preference — default to the browser language.
+      setLocaleState('zh');
     }
   }, []);
 
