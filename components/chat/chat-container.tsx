@@ -4,11 +4,14 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { MessageList } from './message-list';
 import { MessageInput } from './message-input';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { SessionConfig } from '@/lib/types/council';
 import { useI18n } from '@/lib/i18n';
+
 
 interface CouncilStatusData {
   phase: 'gate-check' | 'interjections' | 'round-robin' | 'done';
@@ -48,6 +51,7 @@ export function ChatContainer({
   const { t } = useI18n();
   const [councilStatusMessage, setCouncilStatusMessage] = useState('');
   const [isCouncilProcessing, setIsCouncilProcessing] = useState(false);
+  const [isInputCollapsed, setIsInputCollapsed] = useState(false);
   const activeConversationId = useRef<string | undefined>(conversationId);
   const pendingSave = useRef(false);
 
@@ -103,6 +107,15 @@ export function ChatContainer({
           if (missing.length === 0) return prev;
           return [...prev, ...missing];
         });
+        // Show the live orchestration status emitted by another viewer's wave.
+        const liveStatus = conv.liveStatus as { message?: string } | null | undefined;
+        if (liveStatus?.message) {
+          setIsCouncilProcessing(true);
+          setCouncilStatusMessage(liveStatus.message);
+        } else if (!isCouncilProcessing || liveStatus === null) {
+          setIsCouncilProcessing(false);
+          setCouncilStatusMessage('');
+        }
       } catch {
         // Ignore polling errors
       }
@@ -279,26 +292,82 @@ export function ChatContainer({
         allAgents={allAgents}
         isStreaming={isStreaming}
       />
-      <div className="shrink-0 border-t bg-background p-4">
-        <div className="max-w-3xl mx-auto">
-          <MessageInput
-            onSend={handleSend}
-            onStop={handleStop}
-            isStreaming={isStreaming}
-            allowSendWhileStreaming={true}
-            statusText={councilStatusMessage}
-            disabled={sessionConfig.mode !== 'free-chat' && !primaryAgent}
-            agents={allAgents.filter((a) => sessionConfig.agentIds.includes(a.id))}
-            placeholder={
-              sessionConfig.mode === 'free-chat'
-                ? t.typeMessage
-                : primaryAgent
-                  ? t.messagePlaceholder(primaryAgent.name)
-                  : t.configureAgentFirst
-            }
-          />
+      {isInputCollapsed ? (
+        /* Collapsed minimal bottom bar */
+        <div className="shrink-0 border-t bg-background/95 backdrop-blur-xs px-4 py-2 transition-all duration-200">
+          <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {councilStatusMessage ? (
+                <span className="flex items-center gap-2 text-xs font-medium text-primary truncate">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                  </span>
+                  <span className="truncate">{councilStatusMessage}</span>
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground/80 truncate">
+                  沉浸观赏模式中 · 输入框已折叠
+                </span>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsInputCollapsed(false)}
+              className="h-8 rounded-full px-3.5 text-xs font-medium gap-1.5 shadow-2xs hover:border-primary/50 hover:bg-primary/5 transition-all shrink-0 cursor-pointer"
+            >
+              <ChevronUp className="h-3.5 w-3.5 text-primary" />
+              <span>展开输入框</span>
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : (
+        /* Expanded full input area */
+        <div className="shrink-0 border-t bg-background px-4 pt-2 pb-4 transition-all duration-200">
+          <div className="max-w-3xl mx-auto">
+            <div className="flex items-center justify-between pb-1.5 px-1">
+              {councilStatusMessage ? (
+                <span className="text-xs text-primary font-medium truncate flex items-center gap-1.5">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                  </span>
+                  <span className="truncate">{councilStatusMessage}</span>
+                </span>
+              ) : (
+                <span />
+              )}
+              <button
+                type="button"
+                onClick={() => setIsInputCollapsed(true)}
+                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded-md hover:bg-muted/60 cursor-pointer select-none ml-auto"
+                title="隐藏输入框，全屏沉浸观看讨论"
+              >
+                <span>隐藏输入框</span>
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <MessageInput
+              onSend={handleSend}
+              onStop={handleStop}
+              isStreaming={isStreaming}
+              allowSendWhileStreaming={true}
+              statusText=""
+              disabled={sessionConfig.mode !== 'free-chat' && !primaryAgent}
+              agents={allAgents.filter((a) => sessionConfig.agentIds.includes(a.id))}
+              placeholder={
+                sessionConfig.mode === 'free-chat'
+                  ? t.typeMessage
+                  : primaryAgent
+                    ? t.messagePlaceholder(primaryAgent.name)
+                    : t.configureAgentFirst
+              }
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

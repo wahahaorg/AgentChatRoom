@@ -59,6 +59,8 @@ export interface Conversation {
   agentIds: string[];
   /** Serialised UIMessage[] from the AI SDK */
   messages: unknown[];
+  /** Live orchestration status shown to all viewers while a wave is running. */
+  liveStatus?: { message: string; updatedAt: string } | null;
   createdAt: string;
   updatedAt: string;
 }

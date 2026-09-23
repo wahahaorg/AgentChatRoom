@@ -15,7 +15,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { SCENE_TEMPLATES } from '@/lib/agents/presets';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { Scene } from '@/lib/types/scene';
 import type { ConversationMode } from '@/lib/types/council';
@@ -26,9 +25,15 @@ interface CreateGroupDialogProps {
   agents: AgentConfig[];
   scenes?: Scene[];
   defaultMode?: ConversationMode;
+  collapsed?: boolean;
 }
 
-export function CreateGroupDialog({ agents, scenes = [], defaultMode = 'council' }: CreateGroupDialogProps) {
+export function CreateGroupDialog({
+  agents,
+  scenes = [],
+  defaultMode = 'council',
+  collapsed = false,
+}: CreateGroupDialogProps) {
   const router = useRouter();
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
@@ -37,7 +42,6 @@ export function CreateGroupDialog({ agents, scenes = [], defaultMode = 'council'
   const [mode, setMode] = useState<ConversationMode>(defaultMode);
   const [primaryAgentId, setPrimaryAgentId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [applyingScene, setApplyingScene] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -76,41 +80,6 @@ export function CreateGroupDialog({ agents, scenes = [], defaultMode = 'council'
     setPrimaryAgentId(null);
   };
 
-  const handleApplyScene = async (sceneId: string) => {
-    const scene = SCENE_TEMPLATES.find((s) => s.id === sceneId);
-    if (!scene || applyingScene) return;
-    setApplyingScene(true);
-    try {
-      // Create any scene members that don't exist yet (matched by name).
-      const existing = await (await fetch('/api/config')).json();
-      const existingNames = new Set((existing.agents ?? []).map((a: AgentConfig) => a.name));
-      const toCreate = scene.members.filter((m) => !existingNames.has(m.name));
-      let createdAgents: AgentConfig[] = [];
-      if (toCreate.length > 0) {
-        const res = await fetch('/api/agents/batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agents: toCreate.map((m) => ({ ...m, scene: scene.name })) }),
-        });
-        if (!res.ok) throw new Error('Failed to create scene agents');
-        const data = await res.json();
-        createdAgents = data.agents ?? [];
-      }
-      const allAgents: AgentConfig[] = [...(existing.agents ?? []), ...createdAgents];
-      const sceneIds = scene.members
-        .map((m) => allAgents.find((a: AgentConfig) => a.name === m.name)?.id)
-        .filter((id): id is string => Boolean(id));
-
-      setSelectedIds(sceneIds);
-      setMode(scene.mode);
-      setTitle(scene.name);
-      setPrimaryAgentId(scene.mode === 'free-chat' ? (sceneIds[0] ?? null) : (sceneIds[0] ?? null));
-    } catch {
-      // Keep dialog state on failure
-    } finally {
-      setApplyingScene(false);
-    }
-  };
 
   const handleApplySavedScene = (scene: Scene) => {
     const ids = scene.agentIds.filter((id) => agents.some((a) => a.id === id));
@@ -178,13 +147,18 @@ export function CreateGroupDialog({ agents, scenes = [], defaultMode = 'council'
             size="sm"
             disabled={agents.length === 0}
             className={cn(
-              'h-10 rounded-lg border border-border/70 bg-background shadow-sm transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground w-full justify-start gap-2.5 px-3 text-sm font-medium'
+              'group h-10 rounded-lg border border-border/70 bg-background shadow-2xs transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground',
+              collapsed
+                ? 'w-10 justify-center px-0'
+                : 'w-full justify-start gap-2.5 px-3 text-sm font-medium'
             )}
+            aria-label={t.newGroupChat}
+            title={t.newGroupChat}
           >
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-2xs transition-transform group-hover:scale-105">
               <Users className="h-3.5 w-3.5" strokeWidth={2.4} />
             </span>
-            {t.newGroupChat}
+            {!collapsed && <span>{t.newGroupChat}</span>}
           </Button>
         }
       />
@@ -228,30 +202,6 @@ export function CreateGroupDialog({ agents, scenes = [], defaultMode = 'council'
             </div>
           )}
 
-          {/* Scene templates: one-click cast + mode + title */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium flex items-center gap-1.5">
-              <Wand2 className="h-3.5 w-3.5 text-primary" />
-              场景模板（一键配好成员和模式）
-            </Label>
-            <div className="flex flex-wrap gap-2">
-              {SCENE_TEMPLATES.map((scene) => (
-                <button
-                  key={scene.id}
-                  type="button"
-                  disabled={applyingScene}
-                  onClick={() => handleApplyScene(scene.id)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                    'border-border/70 bg-card hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50',
-                  )}
-                >
-                  <span>{scene.emoji}</span>
-                  {scene.name}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {/* Group Title */}
           <div className="space-y-1.5">

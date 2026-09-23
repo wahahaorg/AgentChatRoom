@@ -82,3 +82,18 @@ export async function flushLiveWave(conversationId: string): Promise<void> {
 export function endLiveWave(conversationId: string): void {
   liveWaves.delete(conversationId);
 }
+
+/** Persist the live orchestration status so polling viewers (other tabs)
+ * see "agent is deciding whether to speak..." too. */
+export async function setLiveStatus(
+  conversationId: string,
+  message: string | null,
+): Promise<void> {
+  const conv = await getConversation(conversationId);
+  if (!conv) return;
+  conv.liveStatus = message
+    ? { message, updatedAt: new Date().toISOString() }
+    : null;
+  conv.updatedAt = new Date().toISOString();
+  await saveConversation(conv);
+}

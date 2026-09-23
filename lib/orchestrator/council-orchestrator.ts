@@ -18,6 +18,7 @@ import {
   appendLivePart,
   flushLiveWave,
   endLiveWave,
+  setLiveStatus,
 } from '@/lib/orchestrator/live-persistence';
 
 interface OrchestratorContext {
@@ -369,6 +370,7 @@ async function runWithRetryBackoff<T>(
 
 function writeCouncilStatus(
   writer: UIMessageStreamWriter,
+  ctx: OrchestratorContext,
   status: CouncilStatusData,
 ): void {
   writer.write({
@@ -376,6 +378,14 @@ function writeCouncilStatus(
     data: status,
     transient: true,
   });
+  // Mirror to the conversation file so polling viewers see the status too.
+  const conversationId = ctx.sessionConfig.conversationId;
+  if (conversationId) {
+    void setLiveStatus(
+      conversationId,
+      status.phase === 'done' ? null : status.message,
+    ).catch(() => {});
+  }
 }
 
 /**
@@ -669,7 +679,7 @@ export async function runCouncilMode(
   const orderedSilentAgents = [...mentionedAgents, ...unmentionedAgents];
 
   if (silentAgents.length === 0) {
-    writeCouncilStatus(writer, {
+    writeCouncilStatus(writer, ctx, {
       phase: 'done',
       pendingAgents: 0,
       totalAgents: 0,
@@ -683,7 +693,7 @@ export async function runCouncilMode(
   let pendingGateChecks = unmentionedAgents.length;
 
   if (unmentionedAgents.length > 0) {
-    writeCouncilStatus(writer, {
+    writeCouncilStatus(writer, ctx, {
       phase: 'gate-check',
       pendingAgents: pendingGateChecks,
       totalAgents: unmentionedAgents.length,
@@ -702,7 +712,7 @@ export async function runCouncilMode(
     gateResults.push(result);
 
     pendingGateChecks -= 1;
-    writeCouncilStatus(writer, {
+    writeCouncilStatus(writer, ctx, {
       phase: 'gate-check',
       pendingAgents: pendingGateChecks,
       totalAgents: unmentionedAgents.length,
@@ -728,7 +738,7 @@ export async function runCouncilMode(
   );
 
   if (interjectingAgents.length > 0) {
-    writeCouncilStatus(writer, {
+    writeCouncilStatus(writer, ctx, {
       phase: 'interjections',
       pendingAgents: interjectingAgents.length,
       totalAgents: interjectingAgents.length,
@@ -755,7 +765,7 @@ export async function runCouncilMode(
     } finally {
       pendingInterjections -= 1;
       if (interjectingAgents.length > 0) {
-        writeCouncilStatus(writer, {
+        writeCouncilStatus(writer, ctx, {
           phase: 'interjections',
           pendingAgents: pendingInterjections,
           totalAgents: interjectingAgents.length,
@@ -768,7 +778,7 @@ export async function runCouncilMode(
     }
   }
 
-  writeCouncilStatus(writer, {
+  writeCouncilStatus(writer, ctx, {
     phase: 'done',
     pendingAgents: 0,
     totalAgents: interjectingAgents.length,
@@ -814,7 +824,7 @@ export async function runRoundRobinMode(
   const firstText = await streamPrimaryAgent(firstAgent, ctx, writer, waitForRequestSlot);
 
   if (orderedAgents.length > 1) {
-    writeCouncilStatus(writer, {
+    writeCouncilStatus(writer, ctx, {
       phase: 'round-robin',
       pendingAgents: orderedAgents.length - 1,
       totalAgents: orderedAgents.length - 1,
@@ -885,7 +895,7 @@ export async function runRoundRobinMode(
     } finally {
       pendingAgents -= 1;
       if (orderedAgents.length > 1) {
-        writeCouncilStatus(writer, {
+        writeCouncilStatus(writer, ctx, {
           phase: 'round-robin',
           pendingAgents,
           totalAgents: activeAgents.length - 1,
@@ -898,7 +908,7 @@ export async function runRoundRobinMode(
     }
   }
 
-  writeCouncilStatus(writer, {
+  writeCouncilStatus(writer, ctx, {
     phase: 'done',
     pendingAgents: 0,
     totalAgents: Math.max(0, orderedAgents.length - 1),
@@ -972,7 +982,7 @@ export async function runFreeChatMode(
     // Single merged call per member: the model either speaks (normal reply)
     // or replies [SILENT] to stay quiet — no separate gate-check step.
     for (const agent of candidates) {
-      writeCouncilStatus(writer, {
+      writeCouncilStatus(writer, ctx, {
         phase: 'gate-check',
         pendingAgents: candidates.length,
         totalAgents: candidates.length,
@@ -1069,7 +1079,7 @@ export async function runFreeChatMode(
     writer.write({ type: 'text-end', id });
   }
 
-  writeCouncilStatus(writer, {
+  writeCouncilStatus(writer, ctx, {
     phase: 'done',
     pendingAgents: 0,
     totalAgents: spokeThisTurn,

@@ -1,10 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { Pencil, Plus, Settings, Trash2, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Pencil, Plus, Settings, Trash2, X, PanelLeftClose, PanelLeftOpen, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -71,9 +70,6 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
     }
   }, []);
 
-  const handleNewChat = async () => {
-    router.push('/chat');
-  };
 
   const handleToggleCollapsed = () => {
     setIsCollapsed((prev) => {
@@ -172,53 +168,47 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
         isCollapsed ? 'w-16' : 'w-64',
       )}
     >
-      <div className={cn('px-3 pt-3', isCollapsed ? 'pb-2' : 'pb-1')}>
+      <div className={cn('px-3 pt-3', isCollapsed ? 'pb-2' : 'pb-2')}>
         {isCollapsed ? (
           <Link
             href="/chat"
-            className="mx-auto flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-xs font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            title="The Council"
+            className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-xs transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            title={t.appBrand}
           >
-            TC
+            <Sparkles className="h-4 w-4" />
           </Link>
         ) : (
-          <Link href="/chat" className="block w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
-            <Image
-              src="/thecouncil.png"
-              alt="The Council"
-              width={480}
-              height={112}
-              priority
-              className="h-auto w-full dark:invert dark:mix-blend-screen"
-            />
+          <Link
+            href="/chat"
+            className="group flex items-center gap-2.5 rounded-xl px-2 py-1.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/90 to-primary text-primary-foreground shadow-xs shadow-primary/20 transition-transform group-hover:scale-105">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-bold tracking-tight text-foreground">
+                  {t.appBrand}
+                </span>
+                <span className="rounded bg-primary/10 px-1 py-0.2 text-[9px] font-semibold text-primary">
+                  研讨
+                </span>
+              </div>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {t.appSlogan}
+              </p>
+            </div>
           </Link>
         )}
       </div>
 
       <div className="px-3 pb-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            'group h-10 rounded-lg border border-border/70 bg-background shadow-sm transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground',
-            isCollapsed
-              ? 'w-10 justify-center px-0'
-              : 'w-full justify-start gap-2.5 px-3 text-sm font-medium',
-          )}
-          onClick={handleNewChat}
-          aria-label={t.newChat}
-          title={t.newChat}
-        >
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm transition-transform group-hover:scale-105">
-            <Plus className="h-3.5 w-3.5" strokeWidth={2.4} />
-          </span>
-          {!isCollapsed && <span>{t.newChat}</span>}
-        </Button>
-        {!isCollapsed && (
-          <div className="mt-2">
-            <CreateGroupDialog agents={agents} scenes={scenes} defaultMode={defaultMode} />
-          </div>
-        )}
+        <CreateGroupDialog
+          agents={agents}
+          scenes={scenes}
+          defaultMode={defaultMode}
+          collapsed={isCollapsed}
+        />
       </div>
 
       <Separator />

@@ -5,14 +5,19 @@ import { useParams, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/sidebar/sidebar';
 import { ChatContainer } from '@/components/chat/chat-container';
 import { ChatSettings } from '@/components/chat/chat-settings';
+import { applySavedScene } from '@/lib/scenes/apply-scene';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { ConversationMode, Conversation, SessionConfig } from '@/lib/types/council';
 import type { CouncilConfig } from '@/lib/types/config';
+import type { Scene } from '@/lib/types/scene';
 
 export default function ConversationPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const router = useRouter();
   const [allAgents, setAllAgents] = useState<AgentConfig[]>([]);
+  const [scenes, setScenes] = useState<Scene[]>([]);
+  const [activeSceneName, setActiveSceneName] = useState<string>('');
+  const [activeSceneEmoji, setActiveSceneEmoji] = useState<string>('💬');
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [primaryAgentId, setPrimaryAgentId] = useState<string | null>(null);
   const [mode, setMode] = useState<ConversationMode>('council');
@@ -28,6 +33,7 @@ export default function ConversationPage() {
 
       const config = (await configRes.json()) as CouncilConfig;
       setAllAgents(config.agents ?? []);
+      setScenes(config.scenes ?? []);
 
       if (convRes.ok) {
         const conv = (await convRes.json()) as Conversation;
@@ -39,6 +45,7 @@ export default function ConversationPage() {
         setPrimaryAgentId(conv.primaryAgentId || config.agents?.[0]?.id || null);
         setMode(conv.mode);
         setSelectedAgentIds(conv.agentIds.length > 0 ? conv.agentIds : (config.agents ?? []).map((a) => a.id));
+        setActiveSceneName(conv.title || '研讨室');
       } else {
         // Conversation not found — redirect to new chat
         router.replace('/chat');
@@ -58,7 +65,6 @@ export default function ConversationPage() {
 
   const handleModeChange = (newMode: ConversationMode) => {
     setMode(newMode);
-    // Persist mode change to conversation
     fetch(`/api/conversations/${conversationId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -82,6 +88,40 @@ export default function ConversationPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentIds: ids }),
     });
+  };
+
+  const handleSelectScene = (scene: Scene) => {
+    const result = applySavedScene(scene, allAgents);
+    setSelectedAgentIds(result.selectedAgentIds);
+    setPrimaryAgentId(result.primaryAgentId);
+    setMode(result.mode);
+    setActiveSceneName(result.sceneName);
+    setActiveSceneEmoji(scene.emoji || '🎯');
+
+    fetch(`/api/conversations/${conversationId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentIds: result.selectedAgentIds,
+        mode: result.mode,
+        primaryAgentId: result.primaryAgentId,
+      }),
+    });
+  };
+
+  const handleCreateScene = async (newScene: Scene) => {
+    const updatedScenes = [...scenes, newScene];
+    setScenes(updatedScenes);
+    try {
+      await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenes: updatedScenes }),
+      });
+    } catch {
+      // Ignore background save errors
+    }
+    handleSelectScene(newScene);
   };
 
   const primaryAgent = allAgents.find((a) => a.id === primaryAgentId);
@@ -110,13 +150,19 @@ export default function ConversationPage() {
       <Sidebar activeConversationId={conversationId} />
       <main className="flex-1 flex min-h-0 min-w-0 flex-col overflow-hidden">
         <ChatSettings
+          title={activeSceneName || conversation?.title}
+          activeSceneName={activeSceneName || conversation?.title}
+          activeSceneEmoji={activeSceneEmoji}
           agents={allAgents}
+          scenes={scenes}
           primaryAgentId={primaryAgentId}
           selectedAgentIds={activeAgentIds}
           mode={mode}
           onModeChange={handleModeChange}
           onPrimaryAgentChange={handlePrimaryAgentChange}
           onSelectedAgentIdsChange={handleSelectedAgentIdsChange}
+          onSelectScene={handleSelectScene}
+          onCreateScene={handleCreateScene}
         />
         <ChatContainer
           key={conversationId}

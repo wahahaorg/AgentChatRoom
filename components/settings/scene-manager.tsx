@@ -80,9 +80,17 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">场景 (Scenes) ({scenes.length})</h3>
+        <div>
+          <h3 className="text-base font-semibold">讨论场景 ({scenes.length})</h3>
+          <p className="text-xs text-muted-foreground">
+            定义群组讨论场景、交流机制与参与的智能体，开始研讨时一键切换。
+          </p>
+        </div>
         <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) resetForm(); }}>
-          <DialogTrigger render={<Button size="sm" />}>新建场景</DialogTrigger>
+          <DialogTrigger render={<Button size="sm" className="gap-1.5 cursor-pointer" />}>
+            <span className="text-sm">+</span>
+            <span>新建场景</span>
+          </DialogTrigger>
           <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto p-6">
             <DialogHeader>
               <DialogTitle>{editingId ? '编辑场景' : '新建场景'}</DialogTitle>
@@ -106,7 +114,7 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
                     id="scene-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="例如：旅游团、辩论场"
+                    placeholder="例如：技术方案评审、辩论交锋"
                   />
                 </div>
               </div>
@@ -129,7 +137,7 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
                       key={m.value}
                       size="sm"
                       variant={mode === m.value ? 'default' : 'outline'}
-                      className="h-7 text-xs"
+                      className="h-7 text-xs cursor-pointer"
                       onClick={() => setMode(m.value)}
                     >
                       {m.label}
@@ -139,7 +147,7 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
               </div>
 
               <div>
-                <Label className="mb-2 block">选择成员（{selectedAgentIds.length}）</Label>
+                <Label className="mb-2 block">选择参与成员（{selectedAgentIds.length}）</Label>
                 <div className="max-h-56 overflow-y-auto rounded-lg border bg-muted/20 p-2.5">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {agents.map((agent) => {
@@ -156,7 +164,7 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
                             )
                           }
                           className={cn(
-                            'flex items-center gap-2 rounded-lg border p-2 text-left transition-all',
+                            'flex items-center gap-2 rounded-lg border p-2 text-left transition-all cursor-pointer select-none',
                             isSelected
                               ? 'border-primary/60 bg-primary/10'
                               : 'border-transparent opacity-50 hover:opacity-80 hover:bg-muted/40',
@@ -176,7 +184,7 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
                 </div>
               </div>
 
-              <Button onClick={handleSave} disabled={!name.trim()} className="w-full">
+              <Button onClick={handleSave} disabled={!name.trim()} className="w-full cursor-pointer">
                 {t.save}
               </Button>
             </div>
@@ -184,72 +192,85 @@ export function SceneManager({ scenes, agents, onSave }: SceneManagerProps) {
         </Dialog>
       </div>
 
-      {scenes.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          还没有场景。新建一个场景，把常用的一组角色组合起来，建群时一键拉入。
-        </p>
-      )}
+      {scenes.length === 0 ? (
+        <Card className="border-dashed bg-muted/10">
+          <CardContent className="py-10 text-center space-y-2">
+            <p className="text-sm font-semibold">暂无自定义讨论场景</p>
+            <p className="text-xs text-muted-foreground">
+              新建一个场景，把常用的一组智能体角色与交流机制组合起来，对话时一键切换。
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 gap-3">
+          {scenes.map((scene) => {
+            const members = (scene.agentIds ?? [])
+              .map((id) => agents.find((a) => a.id === id))
+              .filter((a): a is AgentConfig => Boolean(a));
+            const modeLabel = MODES.find((m) => m.value === scene.mode)?.label ?? scene.mode;
 
-      <div className="space-y-2">
-        {scenes.map((scene) => {
-          const members = scene.agentIds
-            .map((id) => agents.find((a) => a.id === id))
-            .filter((a): a is AgentConfig => Boolean(a));
-          const modeLabel = MODES.find((m) => m.value === scene.mode)?.label ?? scene.mode;
-
-          return (
-            <Card key={scene.id}>
-              <CardHeader className="pb-2 pt-4 px-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xl shrink-0">{scene.emoji ?? '🎭'}</span>
-                    <div className="min-w-0">
-                      <CardTitle className="text-sm">{scene.name}</CardTitle>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {scene.description || modeLabel}
-                      </p>
+            return (
+              <Card key={scene.id} className="rounded-xl border hover:border-primary/40 transition-colors shadow-2xs">
+                <CardHeader className="py-3 px-4 pb-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <span className="text-2xl shrink-0 mt-0.5">{scene.emoji ?? '🎭'}</span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <CardTitle className="text-sm font-bold truncate">{scene.name}</CardTitle>
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
+                            {modeLabel}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">
+                          {scene.description || `${members.length} 位在群成员`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs cursor-pointer"
+                        onClick={() => openEditDialog(scene)}
+                      >
+                        {t.edit}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs text-destructive hover:text-destructive cursor-pointer"
+                        onClick={() => handleDelete(scene.id)}
+                      >
+                        {t.remove}
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Badge variant="outline" className="text-xs">
-                      {modeLabel}
-                    </Badge>
-                    <Button size="sm" variant="ghost" onClick={() => openEditDialog(scene)}>
-                      {t.edit}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => handleDelete(scene.id)}
-                    >
-                      {t.remove}
-                    </Button>
+                </CardHeader>
+                <CardContent className="px-4 pb-3 pt-0">
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                    <span className="text-[11px] text-muted-foreground mr-1">成员:</span>
+                    {members.map((m) => (
+                      <Badge key={m.id} variant="secondary" className="text-xs gap-1 py-0.5">
+                        <span
+                          className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] text-white shrink-0"
+                          style={{ backgroundColor: m.colour }}
+                        >
+                          {m.avatar}
+                        </span>
+                        <span>{m.name}</span>
+                      </Badge>
+                    ))}
+                    {members.length === 0 && (
+                      <span className="text-xs text-muted-foreground">暂未分配成员</span>
+                    )}
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="px-4 pb-3">
-                <div className="flex flex-wrap gap-1.5">
-                  {members.map((m) => (
-                    <Badge key={m.id} variant="secondary" className="text-xs gap-1">
-                      <span
-                        className="flex h-4 w-4 items-center justify-center rounded-full text-[8px] text-white"
-                        style={{ backgroundColor: m.colour }}
-                      >
-                        {m.avatar}
-                      </span>
-                      {m.name}
-                    </Badge>
-                  ))}
-                  {members.length === 0 && (
-                    <span className="text-xs text-muted-foreground">还没有成员</span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

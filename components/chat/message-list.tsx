@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import Image from 'next/image';
 import { MessageBubble, type ChatFileAttachment } from './message-bubble';
 import { InterjectionBlock } from './interjection-block';
 import { AgentErrorBlock } from './agent-error-block';
 import { StickerBlock } from './sticker-block';
 import { parseResponse } from '@/lib/orchestrator/parse-interjections';
 import { useI18n } from '@/lib/i18n';
+import { Sparkles, MessageSquare, ShieldCheck, Eye } from 'lucide-react';
 import type { UIMessage } from 'ai';
 import type { AgentConfig } from '@/lib/types/agents';
 
@@ -145,19 +145,55 @@ export function MessageList({
 
   if (dedupedMessages.length === 0) {
     return (
-      <div className="flex-1 min-h-0 flex items-center justify-center">
-        <div className="text-center space-y-4 max-w-xl px-4">
-          <Image
-            src="/thecouncil.png"
-            alt="The Council"
-            width={1200}
-            height={280}
-            priority
-            className="h-auto w-full dark:invert dark:mix-blend-screen"
-          />
-          <p className="text-muted-foreground">
-            {t.emptyChat}
-          </p>
+      <div className="flex-1 min-h-0 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+        <div className="w-full max-w-xl space-y-6 text-center py-6">
+          <div className="space-y-2">
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-xs ring-1 ring-primary/20 mb-1">
+              <Sparkles className="h-6 w-6" />
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+              {t.emptyChatTitle}
+            </h1>
+            <p className="text-xs sm:text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
+              {t.emptyChatSubtitle}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-left pt-2">
+            <div className="rounded-xl border border-border/70 bg-card/60 p-3.5 space-y-1.5 shadow-2xs">
+              <div className="flex items-center gap-2 text-primary font-semibold text-xs">
+                <ShieldCheck className="h-4 w-4" />
+                <span>方案质询与互审</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                多智能体互相挑刺与补充，发现盲点与漏洞，形成更周全的决策。
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border/70 bg-card/60 p-3.5 space-y-1.5 shadow-2xs">
+              <div className="flex items-center gap-2 text-primary font-semibold text-xs">
+                <MessageSquare className="h-4 w-4" />
+                <span>多维专业视角</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                架构、安全、产品与业务多角色实时研讨，提供综合维度的专业见解。
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border/70 bg-card/60 p-3.5 space-y-1.5 shadow-2xs">
+              <div className="flex items-center gap-2 text-primary font-semibold text-xs">
+                <Eye className="h-4 w-4" />
+                <span>沉浸观战模式</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                一键隐藏折叠输入框，全屏沉浸观看 AI 智囊团头脑风暴与观点交锋。
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-2 text-xs text-muted-foreground/80">
+            💡 在左上角选择讨论场景，或直接在下方输入框发起议题
+          </div>
         </div>
       </div>
     );

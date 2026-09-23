@@ -10,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { PROVIDERS, getModels, getModel } from '@/lib/providers/provider-registry';
-import { AGENT_PRESETS } from '@/lib/agents/presets';
 import { useI18n } from '@/lib/i18n';
 import { nanoid } from 'nanoid';
 import type { AgentConfig, ThinkingConfig } from '@/lib/types/agents';
@@ -74,13 +73,6 @@ export function AgentConfigurator({
     : thinkingCapability?.type === 'adaptive'
       ? 'Adaptive Thinking'
       : 'Thinking Level';
-
-  const handlePreset = (preset: typeof AGENT_PRESETS[number]) => {
-    setName(preset.name);
-    setRole(preset.role);
-    setSystemPrompt(preset.systemPrompt);
-    setAvatar(preset.avatar);
-  };
 
   const resetForm = () => {
     setEditingId(null);
@@ -158,21 +150,6 @@ export function AgentConfigurator({
               <DialogTitle>{editingId ? (t.editAgent ?? '编辑 Agent') : t.addAgent}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 pt-2">
-              <div>
-                <Label className="text-xs text-muted-foreground mb-2 block">{t.quickStart}</Label>
-                <div className="flex flex-wrap gap-1.5">
-                  {AGENT_PRESETS.map((preset) => (
-                    <Badge
-                      key={preset.name}
-                      variant="outline"
-                      className="cursor-pointer hover:bg-muted"
-                      onClick={() => handlePreset(preset)}
-                    >
-                      {preset.avatar} {preset.name}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
 
               <div className="grid grid-cols-[auto_1fr] gap-3 items-start">
                 <div>
@@ -366,60 +343,75 @@ export function AgentConfigurator({
       </div>
 
       {availableProviders.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          {t.needApiKeyFirst}
-        </p>
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-400">
+          ⚠️ 尚未接入任何模型服务商，请先切换到「模型服务商」选项卡添加 API 服务商。
+        </div>
       )}
 
-      <div className="space-y-2">
-        {agents.map((agent) => (
-          <Card key={agent.id}>
-            <CardHeader className="pb-2 pt-4 px-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm"
-                    style={{ backgroundColor: agent.colour }}
-                  >
-                    {agent.avatar}
-                  </span>
-                  <div>
-                    <CardTitle className="text-sm">{agent.name}</CardTitle>
-                    <p className="text-xs text-muted-foreground">{agent.role}</p>
+      {agents.length === 0 ? (
+        <Card className="border-dashed bg-muted/10">
+          <CardContent className="py-10 text-center space-y-2">
+            <p className="text-sm font-semibold">暂无智能体成员</p>
+            <p className="text-xs text-muted-foreground">点击右上角「+ 添加智能体」开始创建属于您的 AI 智囊角色。</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {agents.map((agent) => (
+            <Card key={agent.id} className="rounded-xl border hover:border-primary/40 transition-colors shadow-2xs">
+              <CardHeader className="py-3 px-4 pb-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <span
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ring-2 ring-background shadow-xs mt-0.5"
+                      style={{ backgroundColor: agent.colour }}
+                    >
+                      {agent.avatar}
+                    </span>
+                    <div className="min-w-0">
+                      <CardTitle className="text-sm font-bold truncate">{agent.name}</CardTitle>
+                      <p className="text-xs text-muted-foreground truncate">{agent.role}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs cursor-pointer"
+                      onClick={() => openEditDialog(agent)}
+                    >
+                      {t.edit}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs text-destructive hover:text-destructive cursor-pointer"
+                      onClick={() => onRemove(agent.id)}
+                    >
+                      {t.remove}
+                    </Button>
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => openEditDialog(agent)}
-                  >
-                    {t.edit}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => onRemove(agent.id)}
-                  >
-                    {t.remove}
-                  </Button>
+              </CardHeader>
+              <CardContent className="px-4 pb-3 pt-0">
+                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                  <Badge variant="outline" className="text-[11px] font-normal py-0">
+                    {PROVIDERS[agent.providerId]?.name ?? agent.providerId}
+                  </Badge>
+                  <Badge variant="secondary" className="text-[11px] font-normal py-0">
+                    {agent.modelId}
+                  </Badge>
+                  {agent.systemPrompt && (
+                    <p className="w-full text-[11px] text-muted-foreground/80 line-clamp-1 mt-1 font-mono">
+                      {agent.systemPrompt}
+                    </p>
+                  )}
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="px-4 pb-3">
-              <div className="flex gap-2">
-                <Badge variant="outline" className="text-xs">
-                  {PROVIDERS[agent.providerId]?.name ?? agent.providerId}
-                </Badge>
-                <Badge variant="outline" className="text-xs">
-                  {agent.modelId}
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
