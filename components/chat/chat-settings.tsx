@@ -12,15 +12,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -35,7 +26,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { CreateSceneDialog } from './create-scene-dialog';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { ConversationMode } from '@/lib/types/council';
 import type { Scene } from '@/lib/types/scene';
@@ -47,15 +37,12 @@ import {
   CheckSquare,
   Square,
   Sparkles,
-  ChevronDown,
-  Plus,
 } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
 interface ChatSettingsProps {
   title?: string;
   agents: AgentConfig[];
-  scenes?: Scene[];
   activeSceneName?: string;
   activeSceneEmoji?: string;
   primaryAgentId: string | null;
@@ -64,14 +51,11 @@ interface ChatSettingsProps {
   onModeChange: (mode: ConversationMode) => void;
   onPrimaryAgentChange: (agentId: string) => void;
   onSelectedAgentIdsChange: (ids: string[]) => void;
-  onSelectScene?: (scene: Scene) => void;
-  onCreateScene?: (scene: Scene) => Promise<void> | void;
 }
 
 export function ChatSettings({
   title,
   agents,
-  scenes = [],
   activeSceneName,
   activeSceneEmoji,
   primaryAgentId,
@@ -80,12 +64,9 @@ export function ChatSettings({
   onModeChange,
   onPrimaryAgentChange,
   onSelectedAgentIdsChange,
-  onSelectScene,
-  onCreateScene,
 }: ChatSettingsProps) {
   const { t, locale } = useI18n();
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [createSceneOpen, setCreateSceneOpen] = useState(false);
 
   const toggleAgent = (agentId: string) => {
     if (selectedAgentIds.includes(agentId)) {
@@ -156,67 +137,12 @@ export function ChatSettings({
   return (
     <TooltipProvider>
       <div className="relative flex h-13 min-h-[52px] shrink-0 items-center justify-between border-b bg-muted/20 px-3 sm:px-4 gap-2 z-10 select-none">
-        {/* Left: Scene Dropdown Selector */}
+        {/* Left: current group title */}
         <div className="flex items-center gap-2 min-w-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="group flex items-center gap-2 rounded-lg border border-border/80 bg-background/95 px-2.5 py-1.5 shadow-2xs hover:border-primary/50 hover:bg-muted/40 transition-all cursor-pointer max-w-[200px] sm:max-w-[280px]">
-              <span className="text-base leading-none">{currentSceneEmoji}</span>
-              <div className="min-w-0 text-left">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-foreground truncate leading-tight group-hover:text-primary transition-colors">
-                    {currentSceneDisplay}
-                  </span>
-                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
-                </div>
-              </div>
-            </DropdownMenuTrigger>
-
-            <DropdownMenuContent align="start" className="w-64 max-h-96 overflow-y-auto">
-              {scenes && scenes.length > 0 ? (
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    {t.customScenes}
-                  </DropdownMenuLabel>
-                  {scenes.map((scene) => {
-                    const isCurrent = activeSceneName === scene.name;
-                    return (
-                      <DropdownMenuItem
-                        key={scene.id}
-                        onClick={() => onSelectScene?.(scene)}
-                        className="flex items-center justify-between gap-2 py-2 cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-base">{scene.emoji || '🎯'}</span>
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-foreground truncate">
-                              {scene.name}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground truncate">
-                              {scene.description || `${scene.agentIds?.length ?? 0} 位成员`}
-                            </p>
-                          </div>
-                        </div>
-                        {isCurrent && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </DropdownMenuGroup>
-              ) : (
-                <div className="px-3 py-3 text-center">
-                  <p className="text-xs text-muted-foreground">暂无自定义场景</p>
-                </div>
-              )}
-
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => setCreateSceneOpen(true)}
-                className="flex items-center gap-2 text-primary font-medium py-2 cursor-pointer"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>{t.createScene}</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <span className="text-base leading-none">{currentSceneEmoji}</span>
+          <span className="text-xs font-bold text-foreground truncate leading-tight max-w-[200px] sm:max-w-[280px]">
+            {currentSceneDisplay}
+          </span>
         </div>
 
         {/* Center: Discussion Mode as the Scene's communication rule */}
@@ -458,18 +384,6 @@ export function ChatSettings({
           </Dialog>
         </div>
       </div>
-
-      {/* Create Scene Dialog */}
-      <CreateSceneDialog
-        open={createSceneOpen}
-        onOpenChange={setCreateSceneOpen}
-        agents={agents}
-        onSceneCreated={async (newScene) => {
-          if (onCreateScene) {
-            await onCreateScene(newScene);
-          }
-        }}
-      />
     </TooltipProvider>
   );
 }

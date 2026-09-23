@@ -201,7 +201,7 @@ export function ChatContainer({
     clearError();
   }, [error, clearError]);
 
-  const handleSend = (text: string, files?: FileList, mentionedAgentIds?: string[]) => {
+  const handleSend = async (text: string, files?: FileList, mentionedAgentIds?: string[]) => {
     if (!text.trim() && (!files || files.length === 0)) return;
 
     // Free-chat mode: while the group is still discussing, push the message into
@@ -252,6 +252,39 @@ export function ChatContainer({
     setIsCouncilProcessing(true);
     setCouncilStatusMessage(t.generatingResponse);
 
+    // Create the conversation immediately on the first message so refreshes
+    // mid-wave keep everything (server-side live persistence needs an id).
+    let sendConversationId = activeConversationId.current;
+    if (!sendConversationId) {
+      const firstUserMsg: UIMessage = {
+        id: `pending-${Date.now()}`,
+        role: 'user',
+        parts: [{ type: 'text', text }],
+      };
+      const title = extractTitle(text);
+      try {
+        const res = await fetch('/api/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            mode: sessionConfig.mode,
+            primaryAgentId: sessionConfig.primaryAgentId,
+            agentIds: sessionConfig.agentIds,
+          }),
+        });
+        if (res.ok) {
+          const conv = await res.json();
+          sendConversationId = conv.id;
+          activeConversationId.current = conv.id;
+          onConversationCreated?.(conv.id);
+        }
+      } catch {
+        // Fall back to creating it at end-of-wave save
+      }
+      void firstUserMsg;
+    }
+
     // The user message is persisted server-side by the chat route (single
     // AI SDK id, no duplicate). Send after a brief micro-delay to let the
     // abort controller settle.
@@ -261,9 +294,7 @@ export function ChatContainer({
         {
           body: {
             sessionConfig,
-            ...(activeConversationId.current
-              ? { conversationId: activeConversationId.current }
-              : {}),
+            ...(sendConversationId ? { conversationId: sendConversationId } : {}),
             ...(mentionedAgentIds && mentionedAgentIds.length > 0
               ? { mentionedAgentIds }
               : {}),

@@ -5,17 +5,14 @@ import { useParams, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/sidebar/sidebar';
 import { ChatContainer } from '@/components/chat/chat-container';
 import { ChatSettings } from '@/components/chat/chat-settings';
-import { applySavedScene } from '@/lib/scenes/apply-scene';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { ConversationMode, Conversation, SessionConfig } from '@/lib/types/council';
 import type { CouncilConfig } from '@/lib/types/config';
-import type { Scene } from '@/lib/types/scene';
 
 export default function ConversationPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const router = useRouter();
   const [allAgents, setAllAgents] = useState<AgentConfig[]>([]);
-  const [scenes, setScenes] = useState<Scene[]>([]);
   const [activeSceneName, setActiveSceneName] = useState<string>('');
   const [activeSceneEmoji, setActiveSceneEmoji] = useState<string>('💬');
   const [conversation, setConversation] = useState<Conversation | null>(null);
@@ -33,7 +30,6 @@ export default function ConversationPage() {
 
       const config = (await configRes.json()) as CouncilConfig;
       setAllAgents(config.agents ?? []);
-      setScenes(config.scenes ?? []);
 
       if (convRes.ok) {
         const conv = (await convRes.json()) as Conversation;
@@ -90,40 +86,6 @@ export default function ConversationPage() {
     });
   };
 
-  const handleSelectScene = (scene: Scene) => {
-    const result = applySavedScene(scene, allAgents);
-    setSelectedAgentIds(result.selectedAgentIds);
-    setPrimaryAgentId(result.primaryAgentId);
-    setMode(result.mode);
-    setActiveSceneName(result.sceneName);
-    setActiveSceneEmoji(scene.emoji || '🎯');
-
-    fetch(`/api/conversations/${conversationId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agentIds: result.selectedAgentIds,
-        mode: result.mode,
-        primaryAgentId: result.primaryAgentId,
-      }),
-    });
-  };
-
-  const handleCreateScene = async (newScene: Scene) => {
-    const updatedScenes = [...scenes, newScene];
-    setScenes(updatedScenes);
-    try {
-      await fetch('/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenes: updatedScenes }),
-      });
-    } catch {
-      // Ignore background save errors
-    }
-    handleSelectScene(newScene);
-  };
-
   const primaryAgent = allAgents.find((a) => a.id === primaryAgentId);
   const activeAgentIds = selectedAgentIds.length > 0 ? selectedAgentIds : allAgents.map((a) => a.id);
 
@@ -154,15 +116,12 @@ export default function ConversationPage() {
           activeSceneName={activeSceneName || conversation?.title}
           activeSceneEmoji={activeSceneEmoji}
           agents={allAgents}
-          scenes={scenes}
           primaryAgentId={primaryAgentId}
           selectedAgentIds={activeAgentIds}
           mode={mode}
           onModeChange={handleModeChange}
           onPrimaryAgentChange={handlePrimaryAgentChange}
           onSelectedAgentIdsChange={handleSelectedAgentIdsChange}
-          onSelectScene={handleSelectScene}
-          onCreateScene={handleCreateScene}
         />
         <ChatContainer
           key={conversationId}
