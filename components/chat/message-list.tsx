@@ -136,7 +136,14 @@ export function MessageList({
     shouldAutoScrollRef.current = distanceFromBottom < 80;
   };
 
-  if (messages.length === 0) {
+  // The AI SDK can re-emit a wave's assistant message under the same id when a
+  // new discussion round starts mid-conversation — render only the latest
+  // version of each id so React doesn't see duplicate keys.
+  const dedupedMessages = messages.filter(
+    (message, index) => messages.findLastIndex((m) => m.id === message.id) === index,
+  );
+
+  if (dedupedMessages.length === 0) {
     return (
       <div className="flex-1 min-h-0 flex items-center justify-center">
         <div className="text-center space-y-4 max-w-xl px-4">
@@ -163,8 +170,8 @@ export function MessageList({
       onScroll={handleScroll}
     >
       <div className="mx-auto w-full max-w-3xl px-4 py-4">
-        {messages.map((message, index) => {
-          const isLast = index === messages.length - 1;
+        {dedupedMessages.map((message, index) => {
+          const isLast = index === dedupedMessages.length - 1;
           const fileParts = message.parts
             ?.filter((p): p is ChatFileAttachment & { type: 'file' } => p.type === 'file')
             .map(({ filename, mediaType, url }) => ({ filename, mediaType, url })) ?? [];
