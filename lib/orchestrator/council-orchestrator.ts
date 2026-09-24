@@ -16,8 +16,7 @@ import { consumePendingUserMessages } from '@/lib/orchestrator/pending-messages'
 import {
   startLiveWave,
   appendLivePart,
-  flushLiveWave,
-  endLiveWave,
+  finishLiveWave,
   setLiveStatus,
 } from '@/lib/orchestrator/live-persistence';
 
@@ -28,18 +27,67 @@ interface OrchestratorContext {
   orchestration: OrchestrationConfig;
   /** Agent IDs @-mentioned in the latest user message. */
   mentionedAgentIds: string[];
+  /** Aborted when the viewer disconnects (e.g. the user presses stop). */
+  abortSignal?: AbortSignal;
 }
 
-/** Emit a part to the stream and persist it server-side for all viewers. */
-function writeAndPersist(
-  writer: UIMessageStreamWriter,
-  ctx: OrchestratorContext,
-  part: Record<string, unknown>,
-): void {
-  writer.write(part as never);
-  if (ctx.sessionConfig.conversationId) {
-    appendLivePart(ctx.sessionConfig.conversationId, part);
+/**
+ * Bridge between the orchestrator and the two places a message part can go:
+ * the live HTTP stream (this viewer) and the conversation file on disk (every
+ * viewer, including a reload and a second tab).
+ *
+ * Streaming and persisting are deliberately independent — once a viewer
+ * disconnects, generation continues and the result is still stored, so
+ * reloading the page shows the discussion instead of an empty room.
+ */
+interface Emitter {
+  /** Stream only — for control parts that must not be stored. */
+  send(part: Record<string, unknown>): void;
+  /** Store only. */
+  persist(part: Record<string, unknown>): void;
+  /** Stream AND store. */
+  emit(part: Record<string, unknown>): void;
+}
+
+function createEmitter(writer: UIMessageStreamWriter, sessionConfig: SessionConfig): Emitter {
+  const conversationId = sessionConfig.conversationId;
+  let streamOpen = true;
+
+  const send = (part: Record<string, unknown>) => {
+    if (!streamOpen) return;
+    try {
+      writer.write(part as never);
+    } catch {
+      // Viewer gone — keep generating and persisting.
+      streamOpen = false;
+    }
+  };
+
+  const persist = (part: Record<string, unknown>) => {
+    if (conversationId) appendLivePart(conversationId, part);
+  };
+
+  return {
+    send,
+    persist,
+    emit(part) {
+      persist(part);
+      send(part);
+    },
+  };
+}
+
+function isAborted(ctx: OrchestratorContext): boolean {
+  return ctx.abortSignal?.aborted === true;
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') return true;
+    return /abort/i.test(error.message);
   }
+  return false;
 }
 
 interface CouncilStatusData {
@@ -117,123 +165,43 @@ async function searchStickerImage(query: string, stickerToken: string): Promise<
   }
 }
 
-function writeSticker(writer: UIMessageStreamWriter, agent: AgentConfig, emoji: string): void {
-  writer.write({
-    type: 'data-sticker',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      emoji,
-    },
-  });
+/** Fields every agent-authored part carries so the UI can attribute it. */
+function agentStamp(agent: AgentConfig): Record<string, unknown> {
+  return {
+    agentId: agent.id,
+    agentName: agent.name,
+    agentRole: agent.role,
+    agentAvatar: agent.avatar,
+    agentColour: agent.colour,
+  };
 }
 
-function writeStickerImage(writer: UIMessageStreamWriter, agent: AgentConfig, imageUrl: string, query: string): void {
-  writer.write({
-    type: 'data-sticker',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      imageUrl,
-      query,
-    },
-  });
+function writeSticker(emitter: Emitter, agent: AgentConfig, emoji: string): void {
+  emitter.emit({ type: 'data-sticker', data: { ...agentStamp(agent), emoji } });
+}
+
+function writeStickerImage(emitter: Emitter, agent: AgentConfig, imageUrl: string, query: string): void {
+  emitter.emit({ type: 'data-sticker', data: { ...agentStamp(agent), imageUrl, query } });
 }
 
 /** A reaction on a specific message, emitted as its own data part. */
 function writeInterjectionReaction(
-  writer: UIMessageStreamWriter,
+  emitter: Emitter,
   emoji: string,
   agent: AgentConfig,
   target: string,
 ): void {
-  writer.write({
-    type: 'data-reaction',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      emoji,
-      target,
-    },
-  });
+  emitter.emit({ type: 'data-reaction', data: { ...agentStamp(agent), emoji, target } });
 }
 
-/* Server-side persistence counterparts — build the same data parts as the
- * write* functions and store them in the conversation file. */
-function persistInterjection(ctx: OrchestratorContext, agent: AgentConfig, content: string): void {
-  if (!content.trim() || !ctx.sessionConfig.conversationId) return;
-  appendLivePart(ctx.sessionConfig.conversationId, {
-    type: 'data-interjection',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      content,
-    },
-  });
+function writeInterjection(emitter: Emitter, agent: AgentConfig, content: string): void {
+  if (!content.trim()) return;
+  emitter.emit({ type: 'data-interjection', data: { ...agentStamp(agent), content } });
 }
 
-function persistSticker(ctx: OrchestratorContext, agent: AgentConfig, emoji: string): void {
-  if (!ctx.sessionConfig.conversationId) return;
-  appendLivePart(ctx.sessionConfig.conversationId, {
-    type: 'data-sticker',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      emoji,
-    },
-  });
-}
-
-function persistStickerImage(ctx: OrchestratorContext, agent: AgentConfig, imageUrl: string, query: string): void {
-  if (!ctx.sessionConfig.conversationId) return;
-  appendLivePart(ctx.sessionConfig.conversationId, {
-    type: 'data-sticker',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      imageUrl,
-      query,
-    },
-  });
-}
-
-function persistReaction(ctx: OrchestratorContext, emoji: string, agent: AgentConfig, target: string): void {
-  if (!ctx.sessionConfig.conversationId) return;
-  appendLivePart(ctx.sessionConfig.conversationId, {
-    type: 'data-reaction',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      emoji,
-      target,
-    },
-  });
-}
-
-function persistAgentError(ctx: OrchestratorContext, agent: AgentConfig, error: string): void {
-  if (!ctx.sessionConfig.conversationId) return;
-  appendLivePart(ctx.sessionConfig.conversationId, {
+/** Show an agent's failure as a visible block in the group chat. */
+function writeAgentError(emitter: Emitter, agent: AgentConfig, error: string): void {
+  emitter.emit({
     type: 'data-agent-error',
     data: {
       agentId: agent.id,
@@ -245,29 +213,47 @@ function persistAgentError(ctx: OrchestratorContext, agent: AgentConfig, error: 
   });
 }
 
-function writeResponseMetadata(
-  writer: UIMessageStreamWriter,
+function buildResponseMetadata(agent: AgentConfig, mode: SessionConfig['mode']) {
+  return {
+    primaryAgent: {
+      id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      avatar: agent.avatar,
+      colour: agent.colour,
+      providerId: agent.providerId,
+      modelId: agent.modelId,
+    },
+    mode,
+  };
+}
+
+/**
+ * Start a wave: mint the assistant message id, announce it to the stream and
+ * open a live wave that persists into a message with the SAME id. Sharing the
+ * id is what lets a polling viewer recognise the stored message as the one it
+ * is already showing, instead of appending a duplicate of the whole wave.
+ */
+async function beginWave(
+  emitter: Emitter,
+  ctx: OrchestratorContext,
   agent: AgentConfig,
-  mode: SessionConfig['mode'],
-): void {
-  writer.write({
+): Promise<void> {
+  const messageId = nanoid();
+  const metadata = buildResponseMetadata(agent, ctx.sessionConfig.mode);
+
+  emitter.send({
     type: 'start',
     // Fresh id per wave: without this, the AI SDK client reuses the last
     // assistant message's id and new interjections merge into old messages.
-    messageId: nanoid(),
-    messageMetadata: {
-      primaryAgent: {
-        id: agent.id,
-        name: agent.name,
-        role: agent.role,
-        avatar: agent.avatar,
-        colour: agent.colour,
-        providerId: agent.providerId,
-        modelId: agent.modelId,
-      },
-      mode,
-    },
+    messageId,
+    messageMetadata: metadata,
   });
+
+  const conversationId = ctx.sessionConfig.conversationId;
+  if (conversationId) {
+    await startLiveWave(conversationId, ctx.sessionConfig, { messageId, metadata });
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -354,6 +340,10 @@ async function runWithRetryBackoff<T>(
     try {
       return await run();
     } catch (error) {
+      // The viewer cancelled the request — retrying would restart the work
+      // they just stopped.
+      if (isAbortError(error)) throw error;
+
       const hasMoreAttempts = attempt < attempts - 1;
       if (!hasMoreAttempts || !isRetryableError(error)) {
         throw error;
@@ -369,11 +359,11 @@ async function runWithRetryBackoff<T>(
 }
 
 function writeCouncilStatus(
-  writer: UIMessageStreamWriter,
+  emitter: Emitter,
   ctx: OrchestratorContext,
   status: CouncilStatusData,
 ): void {
-  writer.write({
+  emitter.send({
     type: 'data-council-status',
     data: status,
     transient: true,
@@ -386,6 +376,28 @@ function writeCouncilStatus(
       status.phase === 'done' ? null : status.message,
     ).catch(() => {});
   }
+}
+
+/**
+ * Close a wave: flush everything that is still buffered, announce completion
+ * (so the stored conversation is already up to date when viewers see "done"),
+ * then clear the live status.
+ */
+async function endWave(
+  emitter: Emitter,
+  ctx: OrchestratorContext,
+  totalAgents: number,
+): Promise<void> {
+  const conversationId = ctx.sessionConfig.conversationId;
+  if (conversationId) {
+    await finishLiveWave(conversationId);
+  }
+  writeCouncilStatus(emitter, ctx, {
+    phase: 'done',
+    pendingAgents: 0,
+    totalAgents,
+    message: 'Response complete.',
+  });
 }
 
 /**
@@ -428,7 +440,7 @@ function stripRolePlayedSpeakers(text: string, speakerName: string, agents: Agen
 async function streamPrimaryAgent(
   agent: AgentConfig,
   ctx: OrchestratorContext,
-  writer: UIMessageStreamWriter,
+  emitter: Emitter,
   waitForRequestSlot: () => Promise<void>,
 ): Promise<string> {
   await waitForRequestSlot();
@@ -440,6 +452,7 @@ async function streamPrimaryAgent(
     model,
     system: agent.systemPrompt,
     messages: ctx.modelMessages,
+    ...(ctx.abortSignal ? { abortSignal: ctx.abortSignal } : {}),
     ...(Object.keys(providerOptions).length > 0
       ? { providerOptions: providerOptions as never }
       : {}),
@@ -456,7 +469,7 @@ async function streamPrimaryAgent(
       if (!delta) continue;
 
       if (!started) {
-        writer.write({ type: 'text-start', id });
+        emitter.send({ type: 'text-start', id });
         started = true;
       }
 
@@ -468,12 +481,12 @@ async function streamPrimaryAgent(
       const newDelta = cleaned.slice(written.length);
       if (newDelta) {
         written = cleaned;
-        writer.write({ type: 'text-delta', id, delta: newDelta });
+        emitter.send({ type: 'text-delta', id, delta: newDelta });
       }
     }
 
     if (started) {
-      writer.write({ type: 'text-end', id });
+      emitter.send({ type: 'text-end', id });
       ended = true;
     }
 
@@ -481,10 +494,18 @@ async function streamPrimaryAgent(
       throw new Error('No output generated by the primary agent.');
     }
 
+    // Store the finished answer as a single text part so a reload shows it.
+    emitter.persist({ type: 'text', text: written });
+
     return written;
   } catch (error) {
     if (started && !ended) {
-      writer.write({ type: 'text-end', id });
+      emitter.send({ type: 'text-end', id });
+    }
+    // Keep whatever was produced before the failure/abort: a partial answer
+    // beats an empty room when the page is reloaded.
+    if (written.trim()) {
+      emitter.persist({ type: 'text', text: written });
     }
     throw error;
   }
@@ -528,6 +549,7 @@ Respond with exactly one word: YES or NO`;
       () => generateText({
         model,
         prompt: gatePrompt,
+        ...(ctx.abortSignal ? { abortSignal: ctx.abortSignal } : {}),
       }),
     );
 
@@ -592,6 +614,7 @@ Reply like a real person chatting in a group: casual tone, plain text, a few sho
       model,
       system: agent.systemPrompt,
       messages: interjectionMessages,
+      ...(ctx.abortSignal ? { abortSignal: ctx.abortSignal } : {}),
       ...(Object.keys(providerOptions).length > 0
         ? { providerOptions: providerOptions as never }
         : {}),
@@ -602,46 +625,6 @@ Reply like a real person chatting in a group: casual tone, plain text, a few sho
 }
 
 /**
- * Write an interjection as data parts in the stream so the frontend can display it.
- */
-function writeInterjection(
-  writer: UIMessageStreamWriter,
-  agent: AgentConfig,
-  content: string,
-): void {
-  if (!content.trim()) return;
-  writer.write({
-    type: 'data-interjection',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentRole: agent.role,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      content,
-    },
-  });
-}
-
-/** Show an agent's failure as a visible block in the group chat. */
-function writeAgentError(
-  writer: UIMessageStreamWriter,
-  agent: AgentConfig,
-  error: string,
-): void {
-  writer.write({
-    type: 'data-agent-error',
-    data: {
-      agentId: agent.id,
-      agentName: agent.name,
-      agentAvatar: agent.avatar,
-      agentColour: agent.colour,
-      error,
-    },
-  });
-}
-
-/**
  * Council mode: primary agent responds, then silent agents gate-check and optionally interject.
  */
 export async function runCouncilMode(
@@ -649,6 +632,7 @@ export async function runCouncilMode(
   ctx: OrchestratorContext,
 ): Promise<void> {
   const { config, sessionConfig, orchestration, mentionedAgentIds } = ctx;
+  const emitter = createEmitter(writer, sessionConfig);
   const waitForRequestSlot = createRequestPacer(orchestration);
 
   const primaryAgent = config.agents.find((a) => a.id === sessionConfig.primaryAgentId);
@@ -664,126 +648,124 @@ export async function runCouncilMode(
   );
   ctx.modelMessages = compressed.messages;
 
-  writeResponseMetadata(writer, primaryAgent, sessionConfig.mode);
-
-  // Phase 1: Stream primary agent response
-  const primaryText = await streamPrimaryAgent(primaryAgent, ctx, writer, waitForRequestSlot);
-
-  // Phase 2: Gate checks on silent agents.
-  // Mentioned agents skip gate checks and get to speak first.
   const silentAgents = config.agents.filter(
     (a) => a.id !== sessionConfig.primaryAgentId && sessionConfig.agentIds.includes(a.id),
   );
-  const mentionedAgents = silentAgents.filter((a) => mentionedAgentIds.includes(a.id));
-  const unmentionedAgents = silentAgents.filter((a) => !mentionedAgentIds.includes(a.id));
-  const orderedSilentAgents = [...mentionedAgents, ...unmentionedAgents];
 
-  if (silentAgents.length === 0) {
-    writeCouncilStatus(writer, ctx, {
-      phase: 'done',
-      pendingAgents: 0,
-      totalAgents: 0,
-      message: 'Response complete.',
-    });
-    return;
-  }
+  try {
+    await beginWave(emitter, ctx, primaryAgent);
 
-  // Mentioned agents bypass gate checks entirely; unmentioned agents gate-check as usual.
-  const gateResults: GateDecision[] = [];
-  let pendingGateChecks = unmentionedAgents.length;
+    // Phase 1: Stream primary agent response
+    const primaryText = await streamPrimaryAgent(primaryAgent, ctx, emitter, waitForRequestSlot);
 
-  if (unmentionedAgents.length > 0) {
-    writeCouncilStatus(writer, ctx, {
-      phase: 'gate-check',
-      pendingAgents: pendingGateChecks,
-      totalAgents: unmentionedAgents.length,
-      message: `Other agents are reviewing the primary response (${pendingGateChecks} remaining).`,
-    });
-  }
+    if (isAborted(ctx)) return;
 
-  for (const agent of unmentionedAgents) {
-    const result = await runGateCheck(
-      agent,
-      primaryAgent.name,
-      primaryText,
-      ctx,
-      waitForRequestSlot,
-    );
-    gateResults.push(result);
+    // Phase 2: Gate checks on silent agents.
+    // Mentioned agents skip gate checks and get to speak first.
+    const mentionedAgents = silentAgents.filter((a) => mentionedAgentIds.includes(a.id));
+    const unmentionedAgents = silentAgents.filter((a) => !mentionedAgentIds.includes(a.id));
 
-    pendingGateChecks -= 1;
-    writeCouncilStatus(writer, ctx, {
-      phase: 'gate-check',
-      pendingAgents: pendingGateChecks,
-      totalAgents: unmentionedAgents.length,
-      message:
-        pendingGateChecks > 0
-          ? `Other agents are still reviewing (${pendingGateChecks} remaining).`
-          : 'Gate checks finished.',
-    });
-  }
-
-  const approvedAgents: AgentConfig[] = [...mentionedAgents];
-  for (let i = 0; i < gateResults.length; i++) {
-    const result = gateResults[i];
-    if (result.decision === 'yes') {
-      approvedAgents.push(unmentionedAgents[i]);
+    if (silentAgents.length === 0) {
+      return;
     }
-  }
 
-  // Phase 3: Interjections (limited by maxInterjectionsPerMessage)
-  const interjectingAgents = approvedAgents.slice(
-    0,
-    orchestration.maxInterjectionsPerMessage,
-  );
+    // Mentioned agents bypass gate checks entirely; unmentioned agents gate-check as usual.
+    const gateResults: GateDecision[] = [];
+    let pendingGateChecks = unmentionedAgents.length;
 
-  if (interjectingAgents.length > 0) {
-    writeCouncilStatus(writer, ctx, {
-      phase: 'interjections',
-      pendingAgents: interjectingAgents.length,
-      totalAgents: interjectingAgents.length,
-      message: `Generating interjections from ${interjectingAgents.length} agent${interjectingAgents.length === 1 ? '' : 's'}...`,
-    });
-  }
+    if (unmentionedAgents.length > 0) {
+      writeCouncilStatus(emitter, ctx, {
+        phase: 'gate-check',
+        pendingAgents: pendingGateChecks,
+        totalAgents: unmentionedAgents.length,
+        message: `Other agents are reviewing the primary response (${pendingGateChecks} remaining).`,
+      });
+    }
 
-  let pendingInterjections = interjectingAgents.length;
+    for (const agent of unmentionedAgents) {
+      if (isAborted(ctx)) break;
 
-  for (const agent of interjectingAgents) {
-    try {
-      const interjectionText = await generateInterjection(
+      const result = await runGateCheck(
         agent,
         primaryAgent.name,
         primaryText,
         ctx,
         waitForRequestSlot,
       );
-      writeInterjection(writer, agent, interjectionText);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=interjection error="${message}"`);
-      writeAgentError(writer, agent, message);
-    } finally {
-      pendingInterjections -= 1;
-      if (interjectingAgents.length > 0) {
-        writeCouncilStatus(writer, ctx, {
-          phase: 'interjections',
-          pendingAgents: pendingInterjections,
-          totalAgents: interjectingAgents.length,
-          message:
-            pendingInterjections > 0
-              ? `Finalizing council response (${pendingInterjections} interjection${pendingInterjections === 1 ? '' : 's'} remaining).`
-              : 'Council response complete.',
-        });
+      gateResults.push(result);
+
+      pendingGateChecks -= 1;
+      writeCouncilStatus(emitter, ctx, {
+        phase: 'gate-check',
+        pendingAgents: pendingGateChecks,
+        totalAgents: unmentionedAgents.length,
+        message:
+          pendingGateChecks > 0
+            ? `Other agents are still reviewing (${pendingGateChecks} remaining).`
+            : 'Gate checks finished.',
+      });
+    }
+
+    const approvedAgents: AgentConfig[] = [...mentionedAgents];
+    for (let i = 0; i < gateResults.length; i++) {
+      const result = gateResults[i];
+      if (result.decision === 'yes') {
+        approvedAgents.push(unmentionedAgents[i]);
       }
     }
-  }
 
-  writeCouncilStatus(writer, ctx, {
-    phase: 'done',
-    pendingAgents: 0,
-    totalAgents: interjectingAgents.length,
-    message: 'Response complete.',
-  });
+    // Phase 3: Interjections (limited by maxInterjectionsPerMessage)
+    const interjectingAgents = approvedAgents.slice(
+      0,
+      orchestration.maxInterjectionsPerMessage,
+    );
+
+    if (interjectingAgents.length > 0) {
+      writeCouncilStatus(emitter, ctx, {
+        phase: 'interjections',
+        pendingAgents: interjectingAgents.length,
+        totalAgents: interjectingAgents.length,
+        message: `Generating interjections from ${interjectingAgents.length} agent${interjectingAgents.length === 1 ? '' : 's'}...`,
+      });
+    }
+
+    let pendingInterjections = interjectingAgents.length;
+
+    for (const agent of interjectingAgents) {
+      if (isAborted(ctx)) break;
+
+      try {
+        const interjectionText = await generateInterjection(
+          agent,
+          primaryAgent.name,
+          primaryText,
+          ctx,
+          waitForRequestSlot,
+        );
+        writeInterjection(emitter, agent, interjectionText);
+      } catch (error) {
+        if (isAbortError(error)) break;
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=interjection error="${message}"`);
+        writeAgentError(emitter, agent, message);
+      } finally {
+        pendingInterjections -= 1;
+        if (interjectingAgents.length > 0) {
+          writeCouncilStatus(emitter, ctx, {
+            phase: 'interjections',
+            pendingAgents: pendingInterjections,
+            totalAgents: interjectingAgents.length,
+            message:
+              pendingInterjections > 0
+                ? `Finalizing council response (${pendingInterjections} interjection${pendingInterjections === 1 ? '' : 's'} remaining).`
+                : 'Council response complete.',
+          });
+        }
+      }
+    }
+  } finally {
+    await endWave(emitter, ctx, silentAgents.length);
+  }
 }
 
 /**
@@ -795,6 +777,7 @@ export async function runRoundRobinMode(
 ): Promise<void> {
   const { config, sessionConfig, orchestration, mentionedAgentIds } = ctx;
   const stickerToken = config.stickerSearch?.token;
+  const emitter = createEmitter(writer, sessionConfig);
   const waitForRequestSlot = createRequestPacer(orchestration);
 
   const activeAgents = config.agents.filter((a) =>
@@ -818,102 +801,103 @@ export async function runRoundRobinMode(
   );
   ctx.modelMessages = compressed.messages;
 
-  // First agent streams directly
-  const firstAgent = orderedAgents[0];
-  writeResponseMetadata(writer, firstAgent, sessionConfig.mode);
-  const firstText = await streamPrimaryAgent(firstAgent, ctx, writer, waitForRequestSlot);
+  try {
+    // First agent streams directly
+    const firstAgent = orderedAgents[0];
+    await beginWave(emitter, ctx, firstAgent);
+    const firstText = await streamPrimaryAgent(firstAgent, ctx, emitter, waitForRequestSlot);
 
-  if (orderedAgents.length > 1) {
-    writeCouncilStatus(writer, ctx, {
-      phase: 'round-robin',
-      pendingAgents: orderedAgents.length - 1,
-      totalAgents: orderedAgents.length - 1,
-      message: `Other agents are still preparing responses (${orderedAgents.length - 1} remaining).`,
-    });
-  }
-
-  // Subsequent agents respond sequentially, each seeing all previous responses.
-  const priorResponses: ModelMessage[] = [{ role: 'assistant', content: firstText }];
-  let pendingAgents = orderedAgents.length - 1;
-  for (let i = 1; i < orderedAgents.length; i++) {
-    const agent = orderedAgents[i];
-    try {
-      await waitForRequestSlot();
-
-      const model = createModelInstance(agent, ctx.config);
-      const providerOptions = getThinkingParams(agent);
-
-      const result = await runWithRetryBackoff(
-        `round-robin response (${agent.name})`,
-        ctx.orchestration,
-        () => generateText({
-          model,
-          system: agent.systemPrompt,
-          messages: [
-            ...ctx.modelMessages,
-            ...priorResponses,
-            {
-              role: 'user',
-              content: `The previous agents have already responded. Now it is your turn as ${agent.name} (${agent.role}). Reply like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants, never include other agents' names as headers. You can also use react_to_message to react with emoji to others' messages, or send_sticker for an emoji sticker.`,
-            },
-          ],
-          tools: createReactionTools(agent.name, config.stickerSearch?.token),
-          toolChoice: 'auto',
-          ...(Object.keys(providerOptions).length > 0
-            ? { providerOptions: providerOptions as never }
-            : {}),
-        }),
-      );
-
-      priorResponses.push({
-        role: 'assistant',
-        content: `${agent.name}（${agent.role}）: ${result.text}`,
+    if (orderedAgents.length > 1) {
+      writeCouncilStatus(emitter, ctx, {
+        phase: 'round-robin',
+        pendingAgents: orderedAgents.length - 1,
+        totalAgents: orderedAgents.length - 1,
+        message: `Other agents are still preparing responses (${orderedAgents.length - 1} remaining).`,
       });
-      writeInterjection(writer, agent, stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents));
+    }
 
-      const roundRobinReactions = extractReactionCalls(result);
-      for (const call of roundRobinReactions) {
-        if (call.kind === 'sticker') {
-          writeSticker(writer, agent, call.emoji);
-        } else if (call.kind === 'sticker-image') {
-          if (stickerToken) {
-            const imageUrl = await searchStickerImage(call.query, stickerToken);
-            if (imageUrl) {
-              writeStickerImage(writer, agent, imageUrl, call.query);
-            } else {
-              writeSticker(writer, agent, '🤣');
+    // Subsequent agents respond sequentially, each seeing all previous responses.
+    const priorResponses: ModelMessage[] = [{ role: 'assistant', content: firstText }];
+    let pendingAgents = orderedAgents.length - 1;
+    for (let i = 1; i < orderedAgents.length; i++) {
+      if (isAborted(ctx)) break;
+
+      const agent = orderedAgents[i];
+      try {
+        await waitForRequestSlot();
+
+        const model = createModelInstance(agent, ctx.config);
+        const providerOptions = getThinkingParams(agent);
+
+        const result = await runWithRetryBackoff(
+          `round-robin response (${agent.name})`,
+          ctx.orchestration,
+          () => generateText({
+            model,
+            system: agent.systemPrompt,
+            messages: [
+              ...ctx.modelMessages,
+              ...priorResponses,
+              {
+                role: 'user',
+                content: `The previous agents have already responded. Now it is your turn as ${agent.name} (${agent.role}). Reply like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants, never include other agents' names as headers. You can also use react_to_message to react with emoji to others' messages, or send_sticker for an emoji sticker.`,
+              },
+            ],
+            tools: createReactionTools(agent.name, config.stickerSearch?.token),
+            toolChoice: 'auto',
+            ...(ctx.abortSignal ? { abortSignal: ctx.abortSignal } : {}),
+            ...(Object.keys(providerOptions).length > 0
+              ? { providerOptions: providerOptions as never }
+              : {}),
+          }),
+        );
+
+        priorResponses.push({
+          role: 'assistant',
+          content: `${agent.name}（${agent.role}）: ${result.text}`,
+        });
+        writeInterjection(emitter, agent, stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents));
+
+        const roundRobinReactions = extractReactionCalls(result);
+        for (const call of roundRobinReactions) {
+          if (call.kind === 'sticker') {
+            writeSticker(emitter, agent, call.emoji);
+          } else if (call.kind === 'sticker-image') {
+            if (stickerToken) {
+              const imageUrl = await searchStickerImage(call.query, stickerToken);
+              if (imageUrl) {
+                writeStickerImage(emitter, agent, imageUrl, call.query);
+              } else {
+                writeSticker(emitter, agent, '🤣');
+              }
             }
+          } else {
+            writeInterjectionReaction(emitter, call.emoji, agent, call.target);
           }
-        } else {
-          writeInterjectionReaction(writer, call.emoji, agent, call.target);
+        }
+      } catch (error) {
+        if (isAbortError(error)) break;
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=round-robin error="${message}"`);
+        writeAgentError(emitter, agent, message);
+      } finally {
+        pendingAgents -= 1;
+        if (orderedAgents.length > 1) {
+          writeCouncilStatus(emitter, ctx, {
+            phase: 'round-robin',
+            pendingAgents,
+            totalAgents: activeAgents.length - 1,
+            message:
+              pendingAgents > 0
+                ? `Other agents are still preparing responses (${pendingAgents} remaining).`
+                : 'Response complete.',
+          });
         }
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=round-robin error="${message}"`);
-      writeAgentError(writer, agent, message);
-    } finally {
-      pendingAgents -= 1;
-      if (orderedAgents.length > 1) {
-        writeCouncilStatus(writer, ctx, {
-          phase: 'round-robin',
-          pendingAgents,
-          totalAgents: activeAgents.length - 1,
-          message:
-            pendingAgents > 0
-              ? `Other agents are still preparing responses (${pendingAgents} remaining).`
-              : 'Response complete.',
-        });
-      }
     }
+  } finally {
+    await endWave(emitter, ctx, Math.max(0, orderedAgents.length - 1));
   }
-
-  writeCouncilStatus(writer, ctx, {
-    phase: 'done',
-    pendingAgents: 0,
-    totalAgents: Math.max(0, orderedAgents.length - 1),
-    message: 'Response complete.',
-  });
 }
 
 /**
@@ -926,8 +910,9 @@ export async function runFreeChatMode(
   writer: UIMessageStreamWriter,
   ctx: OrchestratorContext,
 ): Promise<void> {
-  const { config, sessionConfig, orchestration, mentionedAgentIds } = ctx;
+  const { config, sessionConfig, orchestration } = ctx;
   const stickerToken = config.stickerSearch?.token;
+  const emitter = createEmitter(writer, sessionConfig);
   const waitForRequestSlot = createRequestPacer(orchestration);
 
   const members = config.agents.filter((a) =>
@@ -936,16 +921,6 @@ export async function runFreeChatMode(
   if (members.length === 0) {
     throw new Error('No agents configured');
   }
-
-  // Server-side live persistence: keep the conversation file in sync as the
-  // wave streams, so all viewers (and refreshes) see the same messages.
-  if (sessionConfig.conversationId) {
-    await startLiveWave(sessionConfig.conversationId, sessionConfig);
-  }
-
-  // Snapshot of the first member for message metadata (no primary in this mode,
-  // but the frontend expects the metadata shape).
-  writeResponseMetadata(writer, members[0], sessionConfig.mode);
 
   // Free-chat waves keep going until the accumulated discussion exceeds a
   // token budget (instead of a fixed round count), so long interesting
@@ -968,126 +943,122 @@ export async function runFreeChatMode(
     return injected;
   };
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    // Stop the wave when the accumulated discussion exceeds the token budget.
-    if (estimateTokens(transcript) >= FREE_CHAT_TOKEN_BUDGET) break;
+  try {
+    // Server-side live persistence: keep the conversation file in sync as the
+    // wave streams, so all viewers (and refreshes) see the same messages.
+    await beginWave(emitter, ctx, members[0]);
 
-    // Ask every member who has not spoken this round whether they want to speak.
-    const candidates = members.filter((a) => !speakersSoFar.has(a.id) || round > 0);
-    if (candidates.length === 0) break;
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      if (isAborted(ctx)) break;
 
-    const userJustSpoke = drainInjected().length > 0;
-    if (!userJustSpoke && round > 0 && spokeThisTurn === 0) break;
+      // Stop the wave when the accumulated discussion exceeds the token budget.
+      if (estimateTokens(transcript) >= FREE_CHAT_TOKEN_BUDGET) break;
 
-    // Single merged call per member: the model either speaks (normal reply)
-    // or replies [SILENT] to stay quiet — no separate gate-check step.
-    for (const agent of candidates) {
-      writeCouncilStatus(writer, ctx, {
-        phase: 'gate-check',
-        pendingAgents: candidates.length,
-        totalAgents: candidates.length,
-        message: `${agent.name} is deciding whether to speak (round ${round + 1})...`,
-      });
+      // Ask every member who has not spoken this round whether they want to speak.
+      const candidates = members.filter((a) => !speakersSoFar.has(a.id) || round > 0);
+      if (candidates.length === 0) break;
 
-      try {
-        await waitForRequestSlot();
+      const userJustSpoke = drainInjected().length > 0;
+      if (!userJustSpoke && round > 0 && spokeThisTurn === 0) break;
 
-        const model = createModelInstance(agent, ctx.config);
-        const providerOptions = getThinkingParams(agent);
+      // Single merged call per member: the model either speaks (normal reply)
+      // or replies [SILENT] to stay quiet — no separate gate-check step.
+      for (const agent of candidates) {
+        if (isAborted(ctx)) break;
 
-        // Like a real person in a group chat, each member only sees the
-        // recent conversation — no full history, no compression.
-        const recentContext = [
-          ...ctx.modelMessages,
-          ...transcript,
-        ].slice(-10);
+        writeCouncilStatus(emitter, ctx, {
+          phase: 'gate-check',
+          pendingAgents: candidates.length,
+          totalAgents: candidates.length,
+          message: `${agent.name} is deciding whether to speak (round ${round + 1})...`,
+        });
 
-        const result = await runWithRetryBackoff(
-          `free-chat response (${agent.name})`,
-          ctx.orchestration,
-          () => generateText({
-            model,
-            system: agent.systemPrompt,
-            messages: [
-              ...recentContext,
-              {
-                role: 'user',
-                content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation above is what you can see — the latest user message is what everyone is reacting to. If you have something worth saying (a reaction, an answer, a disagreement, casual banter), speak now like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion. You can also use the react_to_message tool to react with emoji to others' messages, or send_sticker to send an emoji sticker — use them naturally like real people do, but do not overuse them. If you have nothing meaningful to add, reply with exactly [SILENT] and nothing else. Prefer silence over noise, but this is a casual group chat — the bar for speaking is low.`,
-              },
-            ],
-            tools: createReactionTools(agent.name, config.stickerSearch?.token),
-            toolChoice: 'auto',
-            ...(Object.keys(providerOptions).length > 0
-              ? { providerOptions: providerOptions as never }
-              : {}),
-          }),
-        );
+        try {
+          await waitForRequestSlot();
 
-        const text = stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents);
-        if (text && text.trim().toUpperCase().includes('[SILENT]')) {
-          // Member chose to stay quiet.
-          continue;
-        }
-        if (text) {
-          transcript.push({
-            role: 'assistant',
-            content: `${agent.name}（${agent.role}）: ${text}`,
-          });
-          speakersSoFar.add(agent.id);
-          spokeThisTurn += 1;
-          writeInterjection(writer, agent, text);
-          persistInterjection(ctx, agent, text);
-        }
+          const model = createModelInstance(agent, ctx.config);
+          const providerOptions = getThinkingParams(agent);
 
-        // Emoji reactions and standalone stickers from tool calls.
-        const reactionCalls = extractReactionCalls(result);
-        for (const call of reactionCalls) {
-          if (call.kind === 'sticker') {
-            writeSticker(writer, agent, call.emoji);
-            persistSticker(ctx, agent, call.emoji);
-          } else if (call.kind === 'sticker-image') {
-            if (stickerToken) {
-              const imageUrl = await searchStickerImage(call.query, stickerToken);
-              if (imageUrl) {
-                writeStickerImage(writer, agent, imageUrl, call.query);
-                persistStickerImage(ctx, agent, imageUrl, call.query);
-              } else {
-                writeSticker(writer, agent, '🤣');
-                persistSticker(ctx, agent, '🤣');
-              }
-            }
-          } else {
-            // Attach as a reaction to the most recent assistant interjection
-            // in the stream (the frontend matches by data part order).
-            writeInterjectionReaction(writer, call.emoji, agent, call.target);
-            persistReaction(ctx, call.emoji, agent, call.target);
+          // Like a real person in a group chat, each member only sees the
+          // recent conversation — no full history, no compression.
+          const recentContext = [
+            ...ctx.modelMessages,
+            ...transcript,
+          ].slice(-10);
+
+          const result = await runWithRetryBackoff(
+            `free-chat response (${agent.name})`,
+            ctx.orchestration,
+            () => generateText({
+              model,
+              system: agent.systemPrompt,
+              messages: [
+                ...recentContext,
+                {
+                  role: 'user',
+                  content: `You are ${agent.name} (${agent.role}) chatting in a group. The conversation above is what you can see — the latest user message is what everyone is reacting to. If you have something worth saying (a reaction, an answer, a disagreement, casual banter), speak now like a real person chatting in a group: casual tone, plain text, a few short sentences. Do not use markdown formatting (no lists, tables, headings, or bold). Do not repeat what others have said. IMPORTANT: speak ONLY as ${agent.name} — never write messages on behalf of other agents, never role-play other participants. Others may also reply after you, so leave room for them — do not conclude the whole discussion. You can also use the react_to_message tool to react with emoji to others' messages, or send_sticker to send an emoji sticker — use them naturally like real people do, but do not overuse them. If you have nothing meaningful to add, reply with exactly [SILENT] and nothing else. Prefer silence over noise, but this is a casual group chat — the bar for speaking is low.`,
+                },
+              ],
+              tools: createReactionTools(agent.name, config.stickerSearch?.token),
+              toolChoice: 'auto',
+              ...(ctx.abortSignal ? { abortSignal: ctx.abortSignal } : {}),
+              ...(Object.keys(providerOptions).length > 0
+                ? { providerOptions: providerOptions as never }
+                : {}),
+            }),
+          );
+
+          const text = stripRolePlayedSpeakers(result.text, agent.name, ctx.config.agents);
+          if (text && text.trim().toUpperCase().includes('[SILENT]')) {
+            // Member chose to stay quiet.
+            continue;
           }
+          if (text) {
+            transcript.push({
+              role: 'assistant',
+              content: `${agent.name}（${agent.role}）: ${text}`,
+            });
+            speakersSoFar.add(agent.id);
+            spokeThisTurn += 1;
+            writeInterjection(emitter, agent, text);
+          }
+
+          // Emoji reactions and standalone stickers from tool calls.
+          const reactionCalls = extractReactionCalls(result);
+          for (const call of reactionCalls) {
+            if (call.kind === 'sticker') {
+              writeSticker(emitter, agent, call.emoji);
+            } else if (call.kind === 'sticker-image') {
+              if (stickerToken) {
+                const imageUrl = await searchStickerImage(call.query, stickerToken);
+                if (imageUrl) {
+                  writeStickerImage(emitter, agent, imageUrl, call.query);
+                } else {
+                  writeSticker(emitter, agent, '🤣');
+                }
+              }
+            } else {
+              // Attach as a reaction to the most recent assistant interjection
+              // in the stream (the frontend matches by data part order).
+              writeInterjectionReaction(emitter, call.emoji, agent, call.target);
+            }
+          }
+        } catch (error) {
+          if (isAbortError(error)) break;
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=free-chat error="${message}"`);
+          writeAgentError(emitter, agent, message);
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[council:agent-failed] agent="${agent.name}" provider=${agent.providerId} model=${agent.modelId} phase=free-chat error="${message}"`);
-        writeAgentError(writer, agent, message);
-        persistAgentError(ctx, agent, message);
       }
     }
-  }
 
-  if (spokeThisTurn === 0) {
-    const id = nanoid();
-    writer.write({ type: 'text-start', id });
-    writer.write({ type: 'text-delta', id, delta: '（本次没有成员想发言）' });
-    writer.write({ type: 'text-end', id });
-  }
-
-  writeCouncilStatus(writer, ctx, {
-    phase: 'done',
-    pendingAgents: 0,
-    totalAgents: spokeThisTurn,
-    message: 'Response complete.',
-  });
-
-  if (sessionConfig.conversationId) {
-    await flushLiveWave(sessionConfig.conversationId);
-    endLiveWave(sessionConfig.conversationId);
+    if (spokeThisTurn === 0) {
+      const id = nanoid();
+      emitter.send({ type: 'text-start', id });
+      emitter.send({ type: 'text-delta', id, delta: '（本次没有成员想发言）' });
+      emitter.send({ type: 'text-end', id });
+    }
+  } finally {
+    await endWave(emitter, ctx, spokeThisTurn);
   }
 }

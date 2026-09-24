@@ -88,45 +88,51 @@ export function ChatContainer({
 
   const isStreaming = status === 'streaming' || status === 'submitted' || isCouncilProcessing;
 
-  // Poll the server for new messages so all viewers of the conversation stay
-  // in sync (another viewer's messages and live agent output land here too).
-  // Skipped while this client is streaming to avoid clobbering local state.
+  // Poll the server for conversation updates so every viewer stays in sync:
+  // assistant output written by a wave is stored server-side under the same
+  // message id the stream announced, so merging by id is enough to pick up
+  // both new messages and parts appended to a message already on screen.
+  // Only the local stream is skipped, so a stale live status can never wedge
+  // this viewer into never polling again.
   useEffect(() => {
     if (!activeConversationId.current || !conversationId) return;
-    const interval = setInterval(async () => {
-      if (status === 'streaming' || status === 'submitted' || isCouncilProcessing) return;
+    let cancelled = false;
+
+    const sync = async () => {
+      if (status === 'streaming' || status === 'submitted') return;
       try {
         const res = await fetch(`/api/conversations/${conversationId}`);
-        if (!res.ok) return;
+        if (!res.ok || cancelled) return;
         const conv = await res.json();
+        if (cancelled) return;
+
         const serverMessages = (conv.messages ?? []) as UIMessage[];
-        if (serverMessages.length === 0) return;
-        setMessages((prev) => {
-          const localIds = new Set(prev.map((m) => m.id));
-          const missing = serverMessages.filter((m) => !localIds.has(m.id));
-          if (missing.length === 0) return prev;
-          return [...prev, ...missing];
-        });
-        // Show the live orchestration status emitted by another viewer's wave.
-        const liveStatus = conv.liveStatus as { message?: string } | null | undefined;
-        if (liveStatus?.message) {
-          setIsCouncilProcessing(true);
-          setCouncilStatusMessage(liveStatus.message);
-        } else if (!isCouncilProcessing || liveStatus === null) {
-          setIsCouncilProcessing(false);
-          setCouncilStatusMessage('');
+        if (serverMessages.length > 0) {
+          setMessages((prev) => mergeServerMessages(prev, serverMessages));
         }
+
+        // A wave running in another viewer keeps the status banner up.
+        const liveStatus = conv.liveStatus as { message?: string } | null | undefined;
+        setIsCouncilProcessing(Boolean(liveStatus?.message));
+        setCouncilStatusMessage(liveStatus?.message ?? '');
       } catch {
         // Ignore polling errors
       }
+    };
+
+    const interval = setInterval(() => {
+      void sync();
     }, 3000);
-    return () => clearInterval(interval);
-  }, [conversationId, status, isCouncilProcessing, setMessages]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [conversationId, status, setMessages]);
 
   // Free-chat mode: messages sent while the group is still discussing are
   // queued and automatically sent as the next round when the current wave ends.
   const pendingSendRef = useRef<{ text: string; files?: FileList; mentionedAgentIds?: string[] } | null>(null);
-  const handleSendRef = useRef<(text: string, files?: FileList, mentionedAgentIds?: string[]) => void>(() => {});
+  const handleSendRef = useRef<(text: string, files?: FileList, mentionedAgentIds?: string[]) => Promise<void>>(async () => {});
 
   const saveMessages = useCallback(async (msgs: UIMessage[]) => {
     const messagesToSave = filterPersistableMessages(msgs);
@@ -169,18 +175,10 @@ export function ChatContainer({
       } catch {
         // Silent failure
       }
-    } else {
-      // Update existing conversation
-      try {
-        await fetch(`/api/conversations/${activeConversationId.current}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: messagesToSave }),
-        });
-      } catch {
-        // Silent failure
-      }
     }
+    // Existing conversations are persisted server-side (user messages by the
+    // chat route, assistant output by live persistence) — no client PUT, so
+    // the client never overwrites server content with its own local view.
   }, [sessionConfig, onConversationCreated]);
 
   // Save when streaming completes; flush a queued free-chat message as the next round.
@@ -231,7 +229,9 @@ export function ChatContainer({
         void fetch(`/api/conversations/${activeConversationId.current}/inject`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
+          // clientId = the queued message's id, so the server persists this
+          // message under the same id and polling won't duplicate it.
+          body: JSON.stringify({ text, clientId: queuedMessage.id }),
         }).catch(() => {
           pendingSendRef.current = { text, files, mentionedAgentIds };
         });
@@ -408,6 +408,46 @@ function extractTitle(text: string): string {
   const cleaned = text.trim().replace(/\n+/g, ' ');
   if (cleaned.length <= 50) return cleaned;
   return cleaned.slice(0, 47) + '...';
+}
+
+function partCount(message: UIMessage): number {
+  return message.parts?.length ?? 0;
+}
+
+/**
+ * Fold the server's stored conversation into the local message list.
+ *
+ * Parts are append-only, so for a message both sides have, the version with
+ * more parts is the newer one. Messages the server does not have yet (the wave
+ * streaming right now, a message queued locally) are kept at the end.
+ */
+function mergeServerMessages(local: UIMessage[], server: UIMessage[]): UIMessage[] {
+  const localById = new Map(local.map((message) => [message.id, message]));
+  const serverIds = new Set<string>();
+  let changed = false;
+
+  const merged = server.map((serverMessage) => {
+    serverIds.add(serverMessage.id);
+    const localMessage = localById.get(serverMessage.id);
+    if (!localMessage) {
+      changed = true;
+      return serverMessage;
+    }
+    if (partCount(serverMessage) > partCount(localMessage)) {
+      changed = true;
+      return serverMessage;
+    }
+    return localMessage;
+  });
+
+  for (const message of local) {
+    if (!serverIds.has(message.id)) {
+      merged.push(message);
+      changed = true;
+    }
+  }
+
+  return changed ? merged : local;
 }
 
 function hasPersistableContent(message: UIMessage): boolean {

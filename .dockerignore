@@ -1,4 +1,6 @@
 node_modules
 .next
 .git
-.council/conversations
+# Local state: config.json holds API keys and sticker tokens in plain text.
+.council
+.claude

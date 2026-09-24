@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   getConversation,
-  saveConversation,
+  updateConversation,
   deleteConversation,
 } from '@/lib/storage/conversation-store';
 
@@ -24,12 +24,11 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const conversation = await getConversation(id);
-  if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const body = await request.json().catch(() => null);
+  if (!body) {
+    return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
   }
 
-  const body = await request.json();
   const { title, mode, primaryAgentId, agentIds, messages } = body as Partial<{
     title: string;
     mode: string;
@@ -38,31 +37,50 @@ export async function PUT(
     messages: unknown[];
   }>;
 
-  if (title !== undefined) conversation.title = title;
-  if (mode !== undefined) conversation.mode = mode as typeof conversation.mode;
-  if (primaryAgentId !== undefined) conversation.primaryAgentId = primaryAgentId;
-  if (agentIds !== undefined) conversation.agentIds = agentIds;
-  if (messages !== undefined) {
-    // Merge by message id instead of overwriting: in group chats multiple
-    // clients save their own view of the conversation, and a blind overwrite
-    // would drop messages saved by other participants.
-    const byId = new Map<string, unknown>();
-    for (const m of conversation.messages) {
-      byId.set((m as { id: string }).id, m);
-    }
-    for (const m of messages) {
-      byId.set((m as { id: string }).id, m);
-    }
-    const merged = [...byId.values()];
-    // Preserve conversation order (by first appearance) — sort merged by
-    // createdAt-ish order is unreliable; keep insertion order of stored first
-    // then append new ones.
-    conversation.messages = merged as typeof conversation.messages;
-  }
-  conversation.updatedAt = new Date().toISOString();
+  // Read-modify-write under the store lock: a blind overwrite would drop
+  // messages that a running wave appended in the meantime.
+  const updated = await updateConversation(id, (conversation) => {
+    if (title !== undefined) conversation.title = title;
+    if (mode !== undefined) conversation.mode = mode as typeof conversation.mode;
+    if (primaryAgentId !== undefined) conversation.primaryAgentId = primaryAgentId;
+    if (agentIds !== undefined) conversation.agentIds = agentIds;
 
-  await saveConversation(conversation);
-  return NextResponse.json(conversation);
+    if (messages !== undefined) {
+      // Merge by message id instead of overwriting: in group chats multiple
+      // clients save their own view of the conversation, and a blind overwrite
+      // would drop messages saved by other participants or by the server.
+      const byId = new Map<string, unknown>();
+      for (const message of conversation.messages) {
+        byId.set((message as { id: string }).id, message);
+      }
+      for (const message of messages) {
+        const messageId = (message as { id?: string })?.id;
+        // A message without an id cannot be matched against a stored one, and
+        // using '' as the key would make every id-less message overwrite the
+        // previous one. Keep those instead of dropping them.
+        if (!messageId) {
+          conversation.messages.push(message as never);
+          continue;
+        }
+        const stored = byId.get(messageId) as { parts?: unknown[] } | undefined;
+        const incoming = message as { parts?: unknown[] };
+        // Parts are append-only: never replace a richer stored version with a
+        // shorter one from a client that has not caught up yet.
+        if (stored && (stored.parts?.length ?? 0) > (incoming.parts?.length ?? 0)) {
+          continue;
+        }
+        byId.set(messageId, message);
+      }
+      conversation.messages = [...byId.values()] as typeof conversation.messages;
+    }
+
+    return conversation;
+  });
+
+  if (!updated) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+  return NextResponse.json(updated);
 }
 
 /** DELETE /api/conversations/:id — delete a conversation */

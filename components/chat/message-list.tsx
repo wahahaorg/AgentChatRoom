@@ -192,7 +192,7 @@ export function MessageList({
           </div>
 
           <div className="pt-2 text-xs text-muted-foreground/80">
-            💡 在左上角选择讨论场景，或直接在下方输入框发起议题
+            💡 直接在下方输入框发起议题，或在左侧新建群聊选择场景
           </div>
         </div>
       </div>

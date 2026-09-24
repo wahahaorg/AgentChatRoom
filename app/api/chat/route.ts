@@ -6,8 +6,13 @@ import {
   type UIMessageStreamWriter,
 } from 'ai';
 import { readConfig } from '@/lib/storage/config-store';
-import { getConversation, saveConversation } from '@/lib/storage/conversation-store';
-import { runCouncilMode, runRoundRobinMode, runFreeChatMode } from '@/lib/orchestrator/council-orchestrator';
+import { upsertMessage } from '@/lib/storage/conversation-store';
+import {
+  runCouncilMode,
+  runRoundRobinMode,
+  runFreeChatMode,
+  isAbortError,
+} from '@/lib/orchestrator/council-orchestrator';
 import type { SessionConfig } from '@/lib/types/council';
 
 interface CouncilStatusData {
@@ -38,6 +43,19 @@ function sanitizeIncomingMessages(messages: UIMessage[]): UIMessage[] {
     if (message.role !== 'assistant') return true;
     return hasModelUsableContent(message);
   });
+}
+
+/** Title for a conversation created as a fallback (client create call failed). */
+function toConversationTitle(message: UIMessage): string {
+  const text = (message.parts ?? [])
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map((part) => part.text)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return 'New Chat';
+  return text.length <= 50 ? text : `${text.slice(0, 47)}...`;
 }
 
 function toUserFacingErrorMessage(error: unknown): string {
@@ -90,7 +108,11 @@ function writeDoneStatus(writer: UIMessageStreamWriter): void {
 }
 
 export async function POST(request: Request) {
-  const body = await request.json();
+  const body = await request.json().catch(() => null);
+  if (!body) {
+    return new Response('Invalid JSON body', { status: 400 });
+  }
+
   const { messages, sessionConfig, mentionedAgentIds, conversationId } = body as {
     messages: UIMessage[];
     sessionConfig: SessionConfig;
@@ -98,25 +120,34 @@ export async function POST(request: Request) {
     conversationId?: string;
   };
 
+  if (!sessionConfig?.mode) {
+    return new Response('sessionConfig is required', { status: 400 });
+  }
+
   const sanitizedMessages = sanitizeIncomingMessages(messages ?? []);
   const modelMessages = await convertToModelMessages(sanitizedMessages);
   const config = await readConfig();
 
   // Persist the latest user message server-side (single AI SDK id, deduped)
-  // so refreshes and other viewers of the conversation see it.
+  // so refreshes and other viewers of the conversation see it. The conversation
+  // is created here if the client's create call never landed, so a wave can
+  // never run against an id that has no stored user message.
   const lastUserMessage = [...sanitizedMessages].reverse().find((m) => m.role === 'user');
   if (conversationId && lastUserMessage) {
-    const conv = await getConversation(conversationId);
-    if (conv) {
-      const alreadyStored = (conv.messages ?? []).some(
-        (m) => (m as { id?: string }).id === lastUserMessage.id,
-      );
-      if (!alreadyStored) {
-        conv.messages.push(lastUserMessage);
-        conv.updatedAt = new Date().toISOString();
-        await saveConversation(conv);
-      }
-    }
+    const now = new Date().toISOString();
+    await upsertMessage(
+      {
+        id: conversationId,
+        title: toConversationTitle(lastUserMessage),
+        mode: sessionConfig.mode,
+        primaryAgentId: sessionConfig.primaryAgentId ?? '',
+        agentIds: sessionConfig.agentIds ?? [],
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      lastUserMessage,
+    );
   }
 
   const stream = createUIMessageStream({
@@ -128,6 +159,9 @@ export async function POST(request: Request) {
           modelMessages,
           orchestration: config.orchestration,
           mentionedAgentIds: mentionedAgentIds ?? [],
+          // The viewer closing the tab (or pressing stop) aborts in-flight
+          // model calls; everything produced so far is already persisted.
+          abortSignal: request.signal,
         };
 
         if (sessionConfig.mode === 'round-robin') {
@@ -138,9 +172,15 @@ export async function POST(request: Request) {
           await runCouncilMode(writer, ctx);
         }
       } catch (error) {
-        console.error('Council orchestrator error:', error);
-        writeAssistantError(writer, toUserFacingErrorMessage(error));
-        writeDoneStatus(writer);
+        try {
+          if (!isAbortError(error)) {
+            console.error('Council orchestrator error:', error);
+            writeAssistantError(writer, toUserFacingErrorMessage(error));
+          }
+          writeDoneStatus(writer);
+        } catch {
+          // The stream is already gone — the conversation file holds the result.
+        }
       }
     },
     onError: (error) => {
