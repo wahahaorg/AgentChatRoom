@@ -1,5 +1,4 @@
 import {
-  convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
   type UIMessage,
@@ -13,6 +12,7 @@ import {
   runFreeChatMode,
   isAbortError,
 } from '@/lib/orchestrator/council-orchestrator';
+import { buildModelMessages, sanitizeIncomingMessages } from '@/lib/orchestrator/model-context';
 import type { SessionConfig } from '@/lib/types/council';
 
 interface CouncilStatusData {
@@ -20,29 +20,6 @@ interface CouncilStatusData {
   pendingAgents: number;
   totalAgents: number;
   message: string;
-}
-
-function hasModelUsableContent(message: UIMessage): boolean {
-  const parts = message.parts ?? [];
-
-  return parts.some((part) => {
-    if (part.type === 'text') {
-      return part.text.trim().length > 0;
-    }
-
-    if (part.type === 'reasoning' || part.type === 'step-start') {
-      return false;
-    }
-
-    return true;
-  });
-}
-
-function sanitizeIncomingMessages(messages: UIMessage[]): UIMessage[] {
-  return messages.filter((message) => {
-    if (message.role !== 'assistant') return true;
-    return hasModelUsableContent(message);
-  });
 }
 
 /** Title for a conversation created as a fallback (client create call failed). */
@@ -125,7 +102,7 @@ export async function POST(request: Request) {
   }
 
   const sanitizedMessages = sanitizeIncomingMessages(messages ?? []);
-  const modelMessages = await convertToModelMessages(sanitizedMessages);
+  const modelMessages = await buildModelMessages(sanitizedMessages);
   const config = await readConfig();
 
   // Persist the latest user message server-side (single AI SDK id, deduped)

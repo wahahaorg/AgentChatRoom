@@ -156,9 +156,3 @@ export async function deleteConversation(id: string): Promise<boolean> {
   });
 }
 
-export async function updateConversationTitle(id: string, title: string): Promise<boolean> {
-  const updated = await updateConversation(id, (conversation) => {
-    conversation.title = title;
-  });
-  return updated !== null;
-}

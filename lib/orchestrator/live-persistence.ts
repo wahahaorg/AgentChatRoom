@@ -1,5 +1,4 @@
-import { getConversation, saveConversation, updateConversation } from '@/lib/storage/conversation-store';
-import type { SessionConfig } from '@/lib/types/council';
+import { updateConversation } from '@/lib/storage/conversation-store';
 
 /**
  * Server-side live conversation persistence: during a streaming wave the
@@ -13,6 +12,10 @@ import type { SessionConfig } from '@/lib/types/council';
  *     duplicate of the whole wave.
  *  2. Appends are atomic read-modify-writes (updateConversation), so an agent
  *     message can never be clobbered by a concurrent status update.
+ *
+ * The conversation record itself is NOT created here — the chat route
+ * persists the user message (creating the conversation if needed) before the
+ * wave starts, so a wave always has a file to append into.
  */
 
 interface LiveWave {
@@ -59,7 +62,6 @@ export interface LiveWaveOptions {
 
 export async function startLiveWave(
   conversationId: string,
-  sessionConfig: SessionConfig,
   options: LiveWaveOptions,
 ): Promise<void> {
   // Two viewers can start a wave for the same conversation at almost the same
@@ -69,21 +71,6 @@ export async function startLiveWave(
     await finishLiveWave(conversationId);
   }
 
-  const existing = await getConversation(conversationId);
-  if (!existing) {
-    // New conversation — create the record with metadata now.
-    const now = new Date().toISOString();
-    await saveConversation({
-      id: conversationId,
-      title: sessionConfig.mode === 'free-chat' ? '新群聊' : '新对话',
-      mode: sessionConfig.mode,
-      primaryAgentId: sessionConfig.primaryAgentId ?? '',
-      agentIds: sessionConfig.agentIds,
-      messages: [],
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
   liveWaves.set(conversationId, {
     messageId: options.messageId,
     metadata: options.metadata,

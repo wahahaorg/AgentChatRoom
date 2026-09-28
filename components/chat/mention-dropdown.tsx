@@ -14,9 +14,14 @@ export function MentionDropdown({ agents, onSelect, position }: MentionDropdownP
   const [highlightIndex, setHighlightIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  // Adjust the highlight during render when the filtered list changes: a
+  // remembered index would otherwise point at a different agent (or past the
+  // end of a shorter list).
+  const [lastAgents, setLastAgents] = useState(agents);
+  if (lastAgents !== agents) {
+    setLastAgents(agents);
     setHighlightIndex(0);
-  }, [agents]);
+  }
 
   useEffect(() => {
     const el = containerRef.current?.children[highlightIndex] as HTMLElement | undefined;

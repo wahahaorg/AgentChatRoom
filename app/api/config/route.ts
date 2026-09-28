@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readConfig, writeConfig } from '@/lib/storage/config-store';
+import { readConfig, updateConfig } from '@/lib/storage/config-store';
 import type { CouncilConfig } from '@/lib/types/config';
 
 function maskKey(key?: string): string {
@@ -36,47 +36,52 @@ export async function GET() {
 export async function PUT(request: Request) {
   try {
     const body = (await request.json()) as Partial<CouncilConfig>;
-    const current = await readConfig();
 
-    const updated: CouncilConfig = {
-      ...current,
-      ...body,
-      apiKeys: {
-        ...current.apiKeys,
-        ...(body.apiKeys ?? {}),
-      },
-      customProviders: body.customProviders !== undefined ? body.customProviders : (current.customProviders ?? []),
-      orchestration: {
-        ...current.orchestration,
-        ...(body.orchestration ?? {}),
-      },
-    };
+    // Read and merge inside the config lock: the settings page saves several
+    // times in a row, and a merge built from a stale read would drop whatever
+    // another save wrote in the meantime.
+    await updateConfig((current) => {
+      const updated: CouncilConfig = {
+        ...current,
+        ...body,
+        apiKeys: {
+          ...current.apiKeys,
+          ...(body.apiKeys ?? {}),
+        },
+        customProviders: body.customProviders !== undefined ? body.customProviders : (current.customProviders ?? []),
+        orchestration: {
+          ...current.orchestration,
+          ...(body.orchestration ?? {}),
+        },
+      };
 
-    // Don't overwrite real keys with masked values
-    for (const [provider, key] of Object.entries(updated.apiKeys)) {
-      if (key && key.includes('•')) {
-        const currentKey = current.apiKeys[provider];
-        if (currentKey) {
-          updated.apiKeys[provider] = currentKey;
+      // Don't overwrite real keys with masked values
+      for (const [provider, key] of Object.entries(updated.apiKeys)) {
+        if (key && key.includes('•')) {
+          const currentKey = current.apiKeys[provider];
+          if (currentKey) {
+            updated.apiKeys[provider] = currentKey;
+          }
         }
       }
-    }
 
-    // Don't overwrite real keys in customProviders with masked values
-    if (updated.customProviders) {
-      updated.customProviders = updated.customProviders.map((cp) => {
-        if (cp.apiKey && cp.apiKey.includes('•')) {
-          const existing = current.customProviders?.find((c) => c.id === cp.id);
-          return {
-            ...cp,
-            apiKey: existing?.apiKey ?? cp.apiKey,
-          };
-        }
-        return cp;
-      });
-    }
+      // Don't overwrite real keys in customProviders with masked values
+      if (updated.customProviders) {
+        updated.customProviders = updated.customProviders.map((cp) => {
+          if (cp.apiKey && cp.apiKey.includes('•')) {
+            const existing = current.customProviders?.find((c) => c.id === cp.id);
+            return {
+              ...cp,
+              apiKey: existing?.apiKey ?? cp.apiKey,
+            };
+          }
+          return cp;
+        });
+      }
 
-    await writeConfig(updated);
+      return updated;
+    });
+
     return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json(

@@ -19,8 +19,13 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>('en');
 
   useEffect(() => {
+    // Both the stored preference and the browser language are client-only, and
+    // reading them during render would desync the server-rendered markup and
+    // cause a hydration mismatch — so the first paint is always the default
+    // locale and this effect corrects it straight after.
     const saved = window.localStorage.getItem('council.locale');
     if (saved === 'zh' || saved === 'en') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe client-only read
       setLocaleState(saved);
     } else if (navigator.language.toLowerCase().startsWith('zh')) {
       // No saved preference — default to the browser language.

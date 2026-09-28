@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 import type { AgentConfig } from '@/lib/types/agents';
 import type { Scene } from '@/lib/types/scene';
 import type { ConversationMode } from '@/lib/types/council';
-import { Users, Check, MessageSquare, RefreshCw, Sparkles, CheckSquare, Square, Wand2 } from 'lucide-react';
+import { Users, Check, MessageSquare, RefreshCw, Sparkles, CheckSquare, Square } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
 interface CreateGroupDialogProps {
@@ -43,13 +43,18 @@ export function CreateGroupDialog({
   const [primaryAgentId, setPrimaryAgentId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    if (open) {
+  // Seed the form from the current agent list every time the dialog opens.
+  // Doing it here (rather than in an effect watching `open`) keeps the reset
+  // an explicit event instead of a render-time side effect, and stops a change
+  // in the agent list from wiping a selection the user is making.
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
       setSelectedIds(agents.map((a) => a.id));
       setPrimaryAgentId(agents[0]?.id ?? null);
       setMode(defaultMode);
     }
-  }, [open, agents, defaultMode]);
+    setOpen(next);
+  };
 
   const toggleAgent = (id: string) => {
     if (selectedIds.includes(id)) {
@@ -139,7 +144,7 @@ export function CreateGroupDialog({
   const primaryAgent = agents.find((a) => a.id === primaryAgentId);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger
         render={
           <Button

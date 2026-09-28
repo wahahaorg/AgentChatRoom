@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { toast } from 'sonner';
@@ -53,7 +53,6 @@ export function ChatContainer({
   const [isCouncilProcessing, setIsCouncilProcessing] = useState(false);
   const [isInputCollapsed, setIsInputCollapsed] = useState(false);
   const activeConversationId = useRef<string | undefined>(conversationId);
-  const pendingSave = useRef(false);
 
   const transport = useMemo(
     () => new DefaultChatTransport({
@@ -72,7 +71,6 @@ export function ChatContainer({
       if (part.data.phase === 'done') {
         setCouncilStatusMessage('');
         setIsCouncilProcessing(false);
-        pendingSave.current = true;
         return;
       }
 
@@ -129,71 +127,6 @@ export function ChatContainer({
     };
   }, [conversationId, status, setMessages]);
 
-  // Free-chat mode: messages sent while the group is still discussing are
-  // queued and automatically sent as the next round when the current wave ends.
-  const pendingSendRef = useRef<{ text: string; files?: FileList; mentionedAgentIds?: string[] } | null>(null);
-  const handleSendRef = useRef<(text: string, files?: FileList, mentionedAgentIds?: string[]) => Promise<void>>(async () => {});
-
-  const saveMessages = useCallback(async (msgs: UIMessage[]) => {
-    const messagesToSave = filterPersistableMessages(msgs);
-    if (messagesToSave.length === 0) return;
-
-    if (!activeConversationId.current) {
-      // Create a new conversation from the first message
-      const firstUserMsg = messagesToSave.find((m) => m.role === 'user');
-      const title = firstUserMsg
-        ? extractTitle(
-            firstUserMsg.parts
-              ?.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-              .map((p) => p.text)
-              .join('') ?? 'New Chat'
-          )
-        : 'New Chat';
-
-      try {
-        const res = await fetch('/api/conversations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            mode: sessionConfig.mode,
-            primaryAgentId: sessionConfig.primaryAgentId,
-            agentIds: sessionConfig.agentIds,
-          }),
-        });
-        if (res.ok) {
-          const conv = await res.json();
-          activeConversationId.current = conv.id;
-          // Save messages to the newly created conversation
-          await fetch(`/api/conversations/${conv.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: messagesToSave }),
-          });
-          onConversationCreated?.(conv.id);
-        }
-      } catch {
-        // Silent failure
-      }
-    }
-    // Existing conversations are persisted server-side (user messages by the
-    // chat route, assistant output by live persistence) — no client PUT, so
-    // the client never overwrites server content with its own local view.
-  }, [sessionConfig, onConversationCreated]);
-
-  // Save when streaming completes; flush a queued free-chat message as the next round.
-  useEffect(() => {
-    if (!isStreaming && pendingSave.current && messages.length > 0) {
-      pendingSave.current = false;
-      void saveMessages(messages);
-    }
-    if (!isStreaming && pendingSendRef.current) {
-      const queued = pendingSendRef.current;
-      pendingSendRef.current = null;
-      handleSendRef.current(queued.text, queued.files, queued.mentionedAgentIds);
-    }
-  }, [isStreaming, messages, saveMessages]);
-
   useEffect(() => {
     if (!error) return;
     clearError();
@@ -204,20 +137,30 @@ export function ChatContainer({
 
     // Free-chat mode: while the group is still discussing, push the message into
     // the live context via the inject endpoint — the next gate check round picks
-    // it up. Falls back to the end-of-wave queue for brand-new conversations
-    // that don't have an id yet.
+    // it up.
     if (sessionConfig.mode === 'free-chat' && isStreaming) {
+      const conversationIdForInject = activeConversationId.current;
+      // A wave only runs inside a conversation, so the id is always set here;
+      // the guard just keeps the fetch honest.
+      if (!conversationIdForInject) {
+        toast.error(t.messageSendFailed);
+        return;
+      }
+      // Read attachments as data URLs. A blob: URL only lives as long as this
+      // page, so the stored message would show a broken attachment after a
+      // reload, and the server could not hand the bytes to a model at all.
+      const attachments = await readAttachments(files);
       // Show the message in the chat immediately (locally).
       const queuedMessage: UIMessage = {
         id: `queued-${Date.now()}`,
         role: 'user',
         parts: [
-          { type: 'text', text },
-          ...Array.from(files ?? []).map((file) => ({
+          ...(text ? [{ type: 'text' as const, text }] : []),
+          ...attachments.map((file) => ({
             type: 'file' as const,
-            url: URL.createObjectURL(file),
-            mediaType: file.type || 'application/octet-stream',
-            filename: file.name,
+            url: file.url,
+            mediaType: file.mediaType,
+            filename: file.filename,
           })),
         ],
       };
@@ -225,19 +168,18 @@ export function ChatContainer({
       setIsCouncilProcessing(true);
       setCouncilStatusMessage(t.messageQueued);
 
-      if (activeConversationId.current) {
-        void fetch(`/api/conversations/${activeConversationId.current}/inject`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // clientId = the queued message's id, so the server persists this
-          // message under the same id and polling won't duplicate it.
-          body: JSON.stringify({ text, clientId: queuedMessage.id }),
-        }).catch(() => {
-          pendingSendRef.current = { text, files, mentionedAgentIds };
-        });
-      } else {
-        pendingSendRef.current = { text, files, mentionedAgentIds };
-      }
+      void fetch(`/api/conversations/${conversationIdForInject}/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // clientId = the queued message's id, so the server persists this
+        // message under the same id and polling won't duplicate it.
+        body: JSON.stringify({ text, clientId: queuedMessage.id, files: attachments }),
+      }).catch(() => {
+        // Delivery failed — the message would never reach the wave or the
+        // conversation file, so take the optimistic copy back off the screen.
+        setMessages((prev) => prev.filter((message) => message.id !== queuedMessage.id));
+        toast.error(t.messageSendFailed);
+      });
       return;
     }
 
@@ -248,7 +190,6 @@ export function ChatContainer({
       setCouncilStatusMessage('');
     }
 
-    pendingSave.current = false;
     setIsCouncilProcessing(true);
     setCouncilStatusMessage(t.generatingResponse);
 
@@ -256,11 +197,6 @@ export function ChatContainer({
     // mid-wave keep everything (server-side live persistence needs an id).
     let sendConversationId = activeConversationId.current;
     if (!sendConversationId) {
-      const firstUserMsg: UIMessage = {
-        id: `pending-${Date.now()}`,
-        role: 'user',
-        parts: [{ type: 'text', text }],
-      };
       const title = extractTitle(text);
       try {
         const res = await fetch('/api/conversations', {
@@ -273,16 +209,19 @@ export function ChatContainer({
             agentIds: sessionConfig.agentIds,
           }),
         });
-        if (res.ok) {
-          const conv = await res.json();
-          sendConversationId = conv.id;
-          activeConversationId.current = conv.id;
-          onConversationCreated?.(conv.id);
-        }
+        if (!res.ok) throw new Error(`create failed: ${res.status}`);
+        const conv = await res.json();
+        sendConversationId = conv.id;
+        activeConversationId.current = conv.id;
+        onConversationCreated?.(conv.id);
       } catch {
-        // Fall back to creating it at end-of-wave save
+        // Without a conversation there is nowhere to persist the message or
+        // the wave — fail loudly instead of sending an ephemeral round.
+        setIsCouncilProcessing(false);
+        setCouncilStatusMessage('');
+        toast.error(t.conversationCreateFailed);
+        return;
       }
-      void firstUserMsg;
     }
 
     // The user message is persisted server-side by the chat route (single
@@ -303,16 +242,14 @@ export function ChatContainer({
       );
     }, 50);
   };
-  handleSendRef.current = handleSend;
 
   const handleStop = () => {
+    // Aborting the request also aborts the server-side wave (request.signal);
+    // everything the agents produced so far is already persisted there, so
+    // there is nothing left for the client to save.
     void stop();
     setIsCouncilProcessing(false);
     setCouncilStatusMessage('');
-    // Save whatever we have so far
-    if (messages.length > 0) {
-      saveMessages(messages);
-    }
   };
 
   return (
@@ -414,6 +351,39 @@ function partCount(message: UIMessage): number {
   return message.parts?.length ?? 0;
 }
 
+interface QueuedAttachment {
+  url: string;
+  mediaType: string;
+  filename: string;
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Inline attachments so they survive the page that produced them. */
+async function readAttachments(files?: FileList): Promise<QueuedAttachment[]> {
+  if (!files || files.length === 0) return [];
+
+  try {
+    return await Promise.all(
+      Array.from(files).map(async (file) => ({
+        url: await readAsDataUrl(file),
+        mediaType: file.type || 'application/octet-stream',
+        filename: file.name,
+      })),
+    );
+  } catch {
+    // An unreadable file must not swallow the message itself.
+    return [];
+  }
+}
+
 /**
  * Fold the server's stored conversation into the local message list.
  *
@@ -448,39 +418,4 @@ function mergeServerMessages(local: UIMessage[], server: UIMessage[]): UIMessage
   }
 
   return changed ? merged : local;
-}
-
-function hasPersistableContent(message: UIMessage): boolean {
-  const parts = message.parts ?? [];
-
-  return parts.some((part) => {
-    if (part.type === 'text') {
-      return part.text.trim().length > 0;
-    }
-
-    if (part.type === 'reasoning' || part.type === 'step-start') {
-      return false;
-    }
-
-    if (part.type === 'data-interjection') {
-      const data = part.data as { content?: string } | undefined;
-      return Boolean(data?.content?.trim());
-    }
-
-    return true;
-  });
-}
-
-function filterPersistableMessages(messages: UIMessage[]): UIMessage[] {
-  const filtered = messages.filter((message) => {
-    if (message.role !== 'assistant') return true;
-    return hasPersistableContent(message);
-  });
-
-  // The AI SDK can re-emit a wave's assistant message under the same id when
-  // a new discussion round starts mid-conversation — keep only the latest
-  // version of each id so stored interjections don't render twice.
-  const latestById = new Map<string, number>();
-  filtered.forEach((message, index) => latestById.set(message.id, index));
-  return filtered.filter((message, index) => latestById.get(message.id) === index);
 }

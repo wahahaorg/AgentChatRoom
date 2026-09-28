@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { Pencil, Plus, Settings, Trash2, X, PanelLeftClose, PanelLeftOpen, Sparkles } from 'lucide-react';
+import { Pencil, Settings, Trash2, X, PanelLeftClose, PanelLeftOpen, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -35,23 +35,26 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
   const [editingTitle, setEditingTitle] = useState('');
   const [savingRenameId, setSavingRenameId] = useState<string | null>(null);
 
-  const fetchConversations = useCallback(async () => {
-    try {
-      const res = await fetch('/api/conversations');
-      if (res.ok) {
-        const data = await res.json();
-        setConversations(data);
-      }
-    } catch {
-      // Ignore fetch errors
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchConversations();
-  }, [fetchConversations, pathname]);
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const res = await fetch('/api/conversations');
+        if (!res.ok) return;
+        const data = (await res.json()) as ConversationSummary[];
+        if (!cancelled) setConversations(data);
+      } catch {
+        // Ignore fetch errors
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
 
   useEffect(() => {
     fetch('/api/config')
@@ -64,8 +67,12 @@ export function Sidebar({ activeConversationId, defaultMode }: SidebarProps) {
   }, []);
 
   useEffect(() => {
+    // The stored preference can only be read on the client, and reading it
+    // during render would desync the server-rendered markup (which has no
+    // access to localStorage) and cause a hydration mismatch.
     const saved = window.localStorage.getItem('council.sidebar.collapsed');
     if (saved) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe client-only read
       setIsCollapsed(saved === 'true');
     }
   }, []);

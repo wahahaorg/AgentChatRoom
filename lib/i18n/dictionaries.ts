@@ -161,6 +161,8 @@ export const dictionaries = {
     generatingResponse: 'Generating primary response...',
     messageQueued: 'Your message is queued — it will be sent when the current discussion round ends.',
     chatFailed: 'Chat request failed',
+    conversationCreateFailed: 'Failed to create the conversation. Please try again.',
+    messageSendFailed: 'Failed to deliver your message. Please try again.',
 
     // Chat settings bar
     mode: 'Mode',
@@ -340,6 +342,8 @@ export const dictionaries = {
     generatingResponse: '正在生成主答回复...',
     messageQueued: '消息已排队——本轮讨论结束后发送。',
     chatFailed: '聊天请求失败',
+    conversationCreateFailed: '创建会话失败，请重试。',
+    messageSendFailed: '消息发送失败，请重试。',
 
     mode: '模式',
     council: '议会交锋',

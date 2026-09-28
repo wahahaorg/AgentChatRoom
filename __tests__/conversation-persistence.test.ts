@@ -17,8 +17,6 @@ import { promises as fs } from 'fs';
 let store: typeof import('@/lib/storage/conversation-store');
 let live: typeof import('@/lib/orchestrator/live-persistence');
 
-const SESSION = { mode: 'free-chat' as const, primaryAgentId: '', agentIds: [] };
-
 beforeAll(async () => {
   // Isolate from the repo's real .council directory: the modules resolve their
   // storage path from process.cwd() at import time.
@@ -91,13 +89,6 @@ describe('conversation store', () => {
   it('reports a missing conversation when deleting', async () => {
     expect(await store.deleteConversation('does-not-exist')).toBe(false);
   });
-
-  it('round-trips a title update', async () => {
-    await seed('titled');
-    expect(await store.updateConversationTitle('titled', 'renamed')).toBe(true);
-    expect((await store.getConversation('titled'))!.title).toBe('renamed');
-    expect(await store.updateConversationTitle('missing', 'x')).toBe(false);
-  });
 });
 
 describe('live wave persistence', () => {
@@ -106,7 +97,7 @@ describe('live wave persistence', () => {
     await seed(id);
 
     const metadata = { primaryAgent: { id: 'a1', name: 'Analyst' }, mode: 'council' };
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-1', metadata });
+    await live.startLiveWave(id, { messageId: 'assistant-1', metadata });
     live.appendLivePart(id, { type: 'data-interjection', data: { content: 'hello' } });
     await live.finishLiveWave(id);
 
@@ -122,7 +113,7 @@ describe('live wave persistence', () => {
   it('keeps every part when status updates interleave with flushes', async () => {
     const id = 'wave-vs-status';
     await seed(id);
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-2' });
+    await live.startLiveWave(id, { messageId: 'assistant-2' });
 
     const expected: string[] = [];
     for (let index = 0; index < 12; index++) {
@@ -152,7 +143,7 @@ describe('live wave persistence', () => {
   it('appends to the same message across successive flushes', async () => {
     const id = 'wave-multi-flush';
     await seed(id);
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-3' });
+    await live.startLiveWave(id, { messageId: 'assistant-3' });
 
     live.appendLivePart(id, { type: 'data-interjection', data: { content: 'first' } });
     await live.flushLiveWave(id);
@@ -170,7 +161,7 @@ describe('live wave persistence', () => {
   it('does not write an empty message when nothing was emitted', async () => {
     const id = 'wave-empty';
     await seed(id);
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-4' });
+    await live.startLiveWave(id, { messageId: 'assistant-4' });
     await live.finishLiveWave(id);
 
     const conversation = await store.getConversation(id);
@@ -180,7 +171,7 @@ describe('live wave persistence', () => {
   it('ignores appends after the wave ends', async () => {
     const id = 'wave-ended';
     await seed(id);
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-5' });
+    await live.startLiveWave(id, { messageId: 'assistant-5' });
     live.appendLivePart(id, { type: 'data-interjection', data: { content: 'kept' } });
     await live.finishLiveWave(id);
 
@@ -200,10 +191,10 @@ describe('live wave persistence', () => {
 
     // Two viewers send at (almost) the same moment: the second wave must not
     // drop the first one's buffered-but-unflushed parts.
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-a' });
+    await live.startLiveWave(id, { messageId: 'assistant-a' });
     live.appendLivePart(id, { type: 'data-interjection', data: { content: 'from-a' } });
 
-    await live.startLiveWave(id, SESSION, { messageId: 'assistant-b' });
+    await live.startLiveWave(id, { messageId: 'assistant-b' });
     live.appendLivePart(id, { type: 'data-interjection', data: { content: 'from-b' } });
     await live.finishLiveWave(id);
 

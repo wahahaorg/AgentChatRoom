@@ -21,12 +21,8 @@ import {
   Loader2,
   Trash2,
   Pencil,
-  Zap,
-  Globe,
-  Radio,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
-import { useI18n } from '@/lib/i18n';
 import type { CustomProviderConfig, ProviderId } from '@/lib/types/config';
 import { PROVIDERS } from '@/lib/providers/provider-registry';
 
@@ -94,7 +90,6 @@ export function UnifiedProviderManager({
   onRemoveCustomProvider,
   onTestCustomProvider,
 }: UnifiedProviderManagerProps) {
-  const { t } = useI18n();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isOfficialEditing, setIsOfficialEditing] = useState<ProviderId | null>(null);

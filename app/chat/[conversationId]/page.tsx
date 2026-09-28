@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/sidebar/sidebar';
 import { ChatContainer } from '@/components/chat/chat-container';
@@ -14,25 +14,37 @@ export default function ConversationPage() {
   const router = useRouter();
   const [allAgents, setAllAgents] = useState<AgentConfig[]>([]);
   const [activeSceneName, setActiveSceneName] = useState<string>('');
-  const [activeSceneEmoji, setActiveSceneEmoji] = useState<string>('💬');
+  // Every conversation in the current build uses the same chat glyph; there is
+  // no per-conversation emoji picker left.
+  const activeSceneEmoji = '💬';
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [primaryAgentId, setPrimaryAgentId] = useState<string | null>(null);
   const [mode, setMode] = useState<ConversationMode>('council');
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [configRes, convRes] = await Promise.all([
-        fetch('/api/config'),
-        fetch(`/api/conversations/${conversationId}`),
-      ]);
+  useEffect(() => {
+    let cancelled = false;
 
-      const config = (await configRes.json()) as CouncilConfig;
-      setAllAgents(config.agents ?? []);
+    void (async () => {
+      try {
+        const [configRes, convRes] = await Promise.all([
+          fetch('/api/config'),
+          fetch(`/api/conversations/${conversationId}`),
+        ]);
 
-      if (convRes.ok) {
+        const config = (await configRes.json()) as CouncilConfig;
+        if (cancelled) return;
+        setAllAgents(config.agents ?? []);
+
+        if (!convRes.ok) {
+          // Conversation not found — redirect to new chat
+          router.replace('/chat');
+          return;
+        }
+
         const conv = (await convRes.json()) as Conversation;
+        if (cancelled) return;
         // Older conversations may have duplicated assistant messages (same id
         // re-emitted per discussion wave) — keep only the latest version.
         const byId = new Map<string, unknown>();
@@ -42,22 +54,18 @@ export default function ConversationPage() {
         setMode(conv.mode);
         setSelectedAgentIds(conv.agentIds.length > 0 ? conv.agentIds : (config.agents ?? []).map((a) => a.id));
         setActiveSceneName(conv.title || '研讨室');
-      } else {
-        // Conversation not found — redirect to new chat
+      } catch {
         router.replace('/chat');
         return;
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    } catch {
-      router.replace('/chat');
-      return;
-    } finally {
-      setLoading(false);
-    }
-  }, [conversationId, router]);
+    })();
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, router]);
 
   const handleModeChange = (newMode: ConversationMode) => {
     setMode(newMode);

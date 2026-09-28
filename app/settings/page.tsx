@@ -34,10 +34,19 @@ export default function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
-    fetchConfig();
+    let cancelled = false;
+
+    void (async () => {
+      await fetchConfig();
+      if (cancelled) return;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [fetchConfig]);
 
   const handleSaveApiKey = async (providerId: ProviderId, apiKey: string) => {

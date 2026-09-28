@@ -4,6 +4,7 @@ import {
   tool,
   type ModelMessage,
   type UIMessageStreamWriter,
+  type UserModelMessage,
 } from 'ai';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
@@ -252,7 +253,7 @@ async function beginWave(
 
   const conversationId = ctx.sessionConfig.conversationId;
   if (conversationId) {
-    await startLiveWave(conversationId, ctx.sessionConfig, { messageId, metadata });
+    await startLiveWave(conversationId, { messageId, metadata });
   }
 }
 
@@ -924,10 +925,12 @@ export async function runFreeChatMode(
 
   // Free-chat waves keep going until the accumulated discussion exceeds a
   // token budget (instead of a fixed round count), so long interesting
-  // discussions are not cut off arbitrarily.
-  const FREE_CHAT_TOKEN_BUDGET = 6000;
+  // discussions are not cut off arbitrarily. Both caps are configurable
+  // (.council/config.json -> orchestration): every round costs one model call
+  // per member, which is where a free chat gets expensive.
+  const FREE_CHAT_TOKEN_BUDGET = orchestration.freeChatTokenBudget ?? 6000;
   // Safety cap: hard stop after this many rounds even if under budget.
-  const MAX_ROUNDS = 12;
+  const MAX_ROUNDS = orchestration.freeChatMaxRounds ?? 12;
 
   // Transcripts accumulate each spoken turn so the next speaker sees them.
   const transcript: ModelMessage[] = [];
@@ -936,11 +939,24 @@ export async function runFreeChatMode(
 
   const drainInjected = (): string[] => {
     const injected = consumePendingUserMessages(sessionConfig.conversationId ?? '');
-    for (const text of injected) {
-      transcript.push({ role: 'user', content: text });
-      ctx.modelMessages.push({ role: 'user', content: text });
+    for (const message of injected) {
+      // Attachments ride along as file parts so a mid-discussion message is
+      // seen by the next speaker, not just its text.
+      // `ModelMessage['content']` unions in assistant parts, which a user
+      // message can never carry — annotate against the user variant.
+      const content: UserModelMessage['content'] = [
+        { type: 'text', text: message.text },
+        ...(message.files ?? []).map((file) => ({
+          type: 'file' as const,
+          data: file.url,
+          mediaType: file.mediaType,
+          ...(file.filename ? { filename: file.filename } : {}),
+        })),
+      ];
+      transcript.push({ role: 'user', content });
+      ctx.modelMessages.push({ role: 'user', content });
     }
-    return injected;
+    return injected.map((message) => message.text);
   };
 
   try {
